@@ -12,12 +12,18 @@ import yaml
 class ArSettings:
     base_url: str
     form_name: str = "HLX:Logs"
-    attachment_field: str = "ZipFile"
+    attachment_field: str = "1EX"
     verify_tls: bool = False
     request_timeout_seconds: int = 60
     poll_interval_seconds: int = 2
     poll_timeout_seconds: int = 60
     result_query_template: str = "'TransactionId' = \"{transaction_id}\""
+
+
+@dataclass
+class StorageSettings:
+    data_dir: str = "/data"
+    retention_days: int = 5
 
 
 @dataclass
@@ -38,6 +44,9 @@ class LogTypeConfig:
     available_on_pods: list[str] = field(default_factory=list)
     enabled: bool = True
     parser: str = "generic"
+    category: str = "General"
+    description: str = ""
+    severity: str = "info"
 
 
 @dataclass
@@ -45,6 +54,7 @@ class AppConfig:
     ar: ArSettings
     pods: list[PodConfig]
     log_types: list[LogTypeConfig]
+    storage: StorageSettings = field(default_factory=StorageSettings)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -62,9 +72,9 @@ def load_config(path: str | Path) -> AppConfig:
 
     ar_data = data.get("ar", {})
     ar = ArSettings(
-        base_url=os.getenv("AR_BASE_URL", ar_data.get("base_url", "http://platform-user-ext:8008")).rstrip("/"),
+        base_url=os.getenv("AR_BASE_URL", ar_data.get("base_url", "http://ars-arserver:8008")).rstrip("/"),
         form_name=os.getenv("AR_FORM_NAME", ar_data.get("form_name", "HLX:Logs")),
-        attachment_field=os.getenv("AR_ATTACHMENT_FIELD", ar_data.get("attachment_field", "ZipFile")),
+        attachment_field=os.getenv("AR_ATTACHMENT_FIELD", ar_data.get("attachment_field", "1EX")),
         verify_tls=_env_bool("AR_VERIFY_TLS", bool(ar_data.get("verify_tls", False))),
         request_timeout_seconds=int(os.getenv("AR_REQUEST_TIMEOUT_SECONDS", ar_data.get("request_timeout_seconds", 60))),
         poll_interval_seconds=int(os.getenv("AR_POLL_INTERVAL_SECONDS", ar_data.get("poll_interval_seconds", 2))),
@@ -72,6 +82,12 @@ def load_config(path: str | Path) -> AppConfig:
         result_query_template=os.getenv("AR_RESULT_QUERY_TEMPLATE", ar_data.get("result_query_template", "'TransactionId' = \"{transaction_id}\"")),
     )
 
+    storage_data = data.get("storage", {})
+    storage = StorageSettings(
+        data_dir=os.getenv("DATA_DIR", storage_data.get("data_dir", "/data")),
+        retention_days=int(os.getenv("RETENTION_DAYS", storage_data.get("retention_days", 5))),
+    )
+
     pods = [PodConfig(**item) for item in data.get("pods", [])]
     log_types = [LogTypeConfig(**item) for item in data.get("log_types", [])]
-    return AppConfig(ar=ar, pods=pods, log_types=log_types)
+    return AppConfig(ar=ar, pods=pods, log_types=log_types, storage=storage)

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head compact-head">
+  <div>
+    <p class="eyebrow">Saved collections</p>
+    <h1>Collected log transactions</h1>
+    <p>Collections are retained for {{ storage.retention_days }} days.</p>
+  </div>
+  <a href="/" class="buttonlike primary">New collection</a>
+</section>
+<section class="content-panel">
+  <table class="data-table">
+    <thead><tr><th>Created</th><th>Transaction</th><th>Rows</th><th>Files</th><th>Summary</th><th></th></tr></thead>
+    <tbody>
+      {% for item in collections %}
+      <tr>
+        <td>{{ item.created_at[:19].replace('T',' ') }}</td>
+        <td><code>{{ item.transaction_id }}</code></td>
+        <td>{{ item.row_count }}</td>
+        <td>{{ item.downloads|length }}</td>
+        <td>
+          {% for level, count in item.summary.levels.items() %}<span class="level-chip level-{{ level|lower }}">{{ level }} {{ count }}</span>{% endfor %}
+        </td>
+        <td><a class="table-action" href="/results/{{ item.transaction_id }}">Open</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No collections have been saved yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

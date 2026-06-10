@@ -1,29 +1,65 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="hero">
-  <h1>Transaction {{ result.transaction_id }}</h1>
-  <p>{{ total_rows }} parsed rows. Showing {{ shown_rows }} of {{ filtered_rows }} matching rows.</p>
+<section class="page-head compact-head">
+  <div>
+    <p class="eyebrow">Visual log view</p>
+    <h1>Transaction {{ result.transaction_id[:12] }}...</h1>
+    <p>{{ total_rows }} parsed rows. Showing {{ shown_rows }} of {{ filtered_rows }} matching rows.</p>
+  </div>
+  <a href="/" class="buttonlike secondary">Collect more</a>
 </section>
-<section class="panel">
+
+<section class="content-panel summary-strip">
+  <div><strong>{{ result.downloads|length }}</strong><span>files</span></div>
+  <div><strong>{{ result.summary.transactions }}</strong><span>transactions</span></div>
+  <div><strong>{{ total_rows }}</strong><span>rows</span></div>
+  {% for level, count in result.summary.levels.items() %}<div><strong>{{ count }}</strong><span>{{ level }}</span></div>{% endfor %}
+</section>
+
+<section class="content-panel downloads-panel">
   <h2>Downloads</h2>
   <div class="downloads">
-    {% for name in result.downloads.keys() %}<a class="pill" href="/results/{{ result.transaction_id }}/download/{{ name }}">{{ name }}</a>{% endfor %}
+    {% for name in downloads.keys() %}<a class="download-link" href="/results/{{ result.transaction_id }}/download/{{ name }}">{{ name }}</a>{% endfor %}
   </div>
 </section>
-<form method="get" class="panel filterbar">
-  <input name="q" placeholder="Search message, pod, filename..." value="{{ q }}">
+
+<form method="get" class="content-panel filterbar">
+  <input name="q" placeholder="Search message, ARERR code, user, transaction, pod, filename..." value="{{ q }}">
   <select name="level"><option value="">All levels</option>{% for item in levels %}<option value="{{ item }}" {% if level == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select>
-  <button>Search</button>
+  <select name="mode"><option value="combined" {% if mode == 'combined' %}selected{% endif %}>Combined</option><option value="transaction" {% if mode == 'transaction' %}selected{% endif %}>By transaction</option><option value="file" {% if mode == 'file' %}selected{% endif %}>By file</option></select>
+  <select name="transaction"><option value="">All transactions</option>{% for tx, count in transactions %}<option value="{{ tx }}" {% if selected_transaction == tx %}selected{% endif %}>{{ tx }} ({{ count }})</option>{% endfor %}</select>
+  <select name="file"><option value="">All files</option>{% for item in files %}<option value="{{ item }}" {% if selected_file == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select>
+  <select name="pod"><option value="">All pods</option>{% for item in pods %}<option value="{{ item }}" {% if selected_pod == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select>
+  <button>Apply</button>
 </form>
-<section class="logview">
+
+{% macro log_table(rows) -%}
+<table class="data-table log-table">
+  <thead><tr><th>Time</th><th>Level</th><th>Pod</th><th>File</th><th>TrID / User</th><th>Message</th></tr></thead>
+  <tbody>
   {% for row in rows %}
-    <article class="logline level-{{ row.level|lower }}">
-      <span class="ts">{{ row.display_ts or 'no timestamp' }}</span>
-      <span class="level">{{ row.level or '-' }}</span>
-      <span class="pod">{{ row.pod }}</span>
-      <span class="file">{{ row.filename }}:{{ row.line_number }}</span>
-      <pre>{{ row.message }}</pre>
-    </article>
+    <tr class="level-row-{{ row.level|lower }}">
+      <td class="mono">{{ row.display_ts or '-' }}</td>
+      <td>{% if row.level %}<span class="level-chip level-{{ row.level|lower }}">{{ row.level }}</span>{% else %}-{% endif %}</td>
+      <td>{{ row.pod }}</td>
+      <td><a href="?mode={{ mode }}&file={{ row.filename }}">{{ row.filename }}</a><small>:{{ row.line_number }}</small></td>
+      <td class="mono small-cell">{% if row.transaction %}<a href="?mode=transaction&transaction={{ row.transaction }}">{{ row.transaction }}</a>{% endif %}{% if row.user %}<br>{{ row.user }}{% endif %}</td>
+      <td><pre>{{ row.message }}</pre>{% if row.ar_code or row.duration_ms or row.tags %}<div class="tags">{% if row.ar_code %}<span>{{ row.ar_code }}</span>{% endif %}{% if row.duration_ms %}<span>{{ '%.0f'|format(row.duration_ms) }} ms</span>{% endif %}{% for tag in row.tags %}<span>{{ tag }}</span>{% endfor %}</div>{% endif %}</td>
+    </tr>
   {% endfor %}
-</section>
+  </tbody>
+</table>
+{%- endmacro %}
+
+{% if mode == 'file' %}
+  {% for filename, group in by_file.items() %}
+  <section class="content-panel group-panel"><h2>{{ filename }} <small>{{ group|length }} rows</small></h2>{{ log_table(group) }}</section>
+  {% endfor %}
+{% elif mode == 'transaction' %}
+  {% for tx, group in by_transaction.items() %}
+  <section class="content-panel group-panel"><h2>{{ tx }} <small>{{ group|length }} rows</small></h2>{{ log_table(group) }}</section>
+  {% endfor %}
+{% else %}
+<section class="content-panel group-panel">{{ log_table(rows) }}</section>
+{% endif %}
 {% endblock %}

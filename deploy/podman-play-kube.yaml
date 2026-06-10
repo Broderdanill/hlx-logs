@@ -5,38 +5,149 @@ metadata:
 data:
   config.yaml: |
     ar:
-      base_url: "http://platform-user-ext:8008"
+      # Can be overridden with AR_BASE_URL env var, for example http://ars-arserver:8008
+      base_url: "http://ars-arserver:8008"
       form_name: "HLX:Logs"
-      attachment_field: "ZipFile"
+      attachment_field: "1EX"
       verify_tls: false
       request_timeout_seconds: 60
       poll_interval_seconds: 2
       poll_timeout_seconds: 60
       result_query_template: "'TransactionId' = \"{transaction_id}\""
+    
     pods:
       - id: "arserver.sandbox"
         label: "AR Server sandbox"
         enabled: true
         tags: ["arserver", "sandbox"]
-      - id: "platform-fts"
-        label: "Platform FTS"
-        enabled: true
-        tags: ["fts"]
+    
     log_types:
       - id: "arerror"
-        label: "AR error log"
+        label: "AR error"
         filename: "arerror.log"
         directory: "/opt/bmc/ARSystem/db"
-        available_on_tags: ["arserver", "fts"]
+        available_on_tags: ["arserver"]
         enabled: true
-        parser: "generic"
+        parser: "core"
+        category: "Core AR"
+        severity: "critical"
+        description: "Primary AR System error and warning log. Start here for ARERR/ARWARN messages."
+      - id: "ardebug"
+        label: "AR debug"
+        filename: "ardebug.log"
+        directory: "/opt/bmc/ARSystem/db"
+        available_on_tags: ["arserver"]
+        enabled: true
+        parser: "performance"
+        category: "Performance"
+        severity: "debug"
+        description: "Debug trace used when server-side logging is enabled, often useful for startup and workflow investigation."
+      - id: "arexception"
+        label: "AR exception"
+        filename: "arexception.log"
+        directory: "/opt/bmc/ARSystem/db"
+        available_on_tags: ["arserver"]
+        enabled: true
+        parser: "core"
+        category: "Core AR"
+        severity: "critical"
+        description: "Exception and stack trace focused log."
+      - id: "armonitor"
+        label: "AR monitor"
+        filename: "armonitor.log"
+        directory: "/opt/bmc/ARSystem/db"
+        available_on_tags: ["arserver"]
+        enabled: true
+        parser: "core"
+        category: "Core AR"
+        severity: "warning"
+        description: "Startup, shutdown and monitored process activity."
+      - id: "arhgroup"
+        label: "AR server group"
+        filename: "arhgroup.log"
+        directory: "/opt/bmc/ARSystem/db"
+        available_on_tags: ["arserver"]
+        enabled: true
+        parser: "core"
+        category: "Server Group"
+        severity: "info"
+        description: "Server group/high availability activity."
       - id: "arjavaplugin"
-        label: "Java plugin log"
+        label: "Java plugin"
         filename: "arjavaplugin.log"
         directory: "/opt/bmc/ARSystem/db"
         available_on_tags: ["arserver"]
         enabled: true
-        parser: "generic"
+        parser: "plugin"
+        category: "Plugin"
+        severity: "warning"
+        description: "Java plugin server activity, integrations and plugin errors."
+      - id: "arplugin"
+        label: "C plugin"
+        filename: "arplugin.log"
+        directory: "/opt/bmc/ARSystem/db"
+        available_on_tags: ["arserver"]
+        enabled: true
+        parser: "plugin"
+        category: "Plugin"
+        severity: "warning"
+        description: "C/plugin server activity if enabled/configured in this environment."
+      - id: "arapi"
+        label: "AR API"
+        filename: "arapi.log"
+        directory: "/opt/bmc/ARSystem/db"
+        available_on_tags: ["arserver"]
+        enabled: true
+        parser: "performance"
+        category: "Performance"
+        severity: "info"
+        description: "API calls and RPC activity when API logging is enabled."
+      - id: "arfilter"
+        label: "AR filter"
+        filename: "arfilter.log"
+        directory: "/opt/bmc/ARSystem/db"
+        available_on_tags: ["arserver"]
+        enabled: true
+        parser: "performance"
+        category: "Performance"
+        severity: "info"
+        description: "Filter/workflow execution trace when filter logging is enabled."
+      - id: "arsql"
+        label: "AR SQL"
+        filename: "arsql.log"
+        directory: "/opt/bmc/ARSystem/db"
+        available_on_tags: ["arserver"]
+        enabled: true
+        parser: "performance"
+        category: "Performance"
+        severity: "info"
+        description: "SQL statements and database timing when SQL logging is enabled."
+      - id: "arescl"
+        label: "AR escalation"
+        filename: "arescl.log"
+        directory: "/opt/bmc/ARSystem/db"
+        available_on_tags: ["arserver"]
+        enabled: true
+        parser: "performance"
+        category: "Performance"
+        severity: "info"
+        description: "Escalation activity when escalation logging is enabled."
+      - id: "aruser"
+        label: "AR user"
+        filename: "aruser.log"
+        directory: "/opt/bmc/ARSystem/db"
+        available_on_tags: ["arserver"]
+        enabled: true
+        parser: "performance"
+        category: "Performance"
+        severity: "info"
+        description: "User/session activity when user logging is enabled."
+    
+    
+    storage:
+      data_dir: "/data"
+      retention_days: 5
+
 ---
 apiVersion: v1
 kind: Pod
@@ -51,8 +162,8 @@ spec:
       image: localhost/hlx-logs:latest
       imagePullPolicy: Never
       ports:
-        - containerPort: 8080
-          hostPort: 8080
+        - containerPort: 8095
+          hostPort: 8095
       env:
         - name: LOG_LEVEL
           value: "INFO"
@@ -60,15 +171,21 @@ spec:
           value: "change-me-to-a-long-random-string"
         - name: CONFIG_PATH
           value: "/app/config.yaml"
+        - name: DATA_DIR
+          value: "/data"
         # Optional override. If omitted, config.yaml base_url is used.
         # - name: AR_BASE_URL
-        #   value: "http://platform-user-ext:8008"
+        #   value: "http://ars-arserver:8008"
       volumeMounts:
         - name: hlx-logs-config
           mountPath: /app/config.yaml
           subPath: config.yaml
           readOnly: true
+        - name: hlx-logs-data
+          mountPath: /data
   volumes:
     - name: hlx-logs-config
       configMap:
         name: hlx-logs-config
+    - name: hlx-logs-data
+      emptyDir: {}

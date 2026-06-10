@@ -4,10 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Login · hlx-logs</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body class="login-bg">
-  <main class="login-card">
+  <main class="login-card glass">
+    <img src="/static/app-icon.png" alt="hlx-logs" class="login-logo">
     <h1>hlx-logs</h1>
     <p>Login with your Helix / AR System credentials. The application stores only the AR-JWT token in your session.</p>
     {% if error %}<div class="alert">{{ error }}</div>{% endif %}
