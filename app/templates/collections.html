@@ -1,30 +1,33 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="page-head compact-head">
-  <div>
-    <p class="eyebrow">Saved collections</p>
-    <h1>Collected log transactions</h1>
-    <p>Collections are retained for {{ storage.retention_days }} days.</p>
+<section class="main-pane full-pane">
+  <div class="pane-titlebar">
+    <div>
+      <h1>Collections</h1>
+      <p>Collections are user scoped and retained for {{ storage.retention_days }} days while the pod is alive.</p>
+    </div>
+    <a href="/" class="buttonlike primary">New collection</a>
   </div>
-  <a href="/" class="buttonlike primary">New collection</a>
-</section>
-<section class="content-panel">
   <table class="data-table">
-    <thead><tr><th>Created</th><th>Transaction</th><th>Rows</th><th>Files</th><th>Summary</th><th></th></tr></thead>
+    <thead><tr><th>Created</th><th>Name / Source</th><th>Transaction</th><th>Rows</th><th>Files</th><th>Failed</th><th>Summary</th><th>Actions</th></tr></thead>
     <tbody>
       {% for item in collections %}
       <tr>
         <td>{{ item.created_at[:19].replace('T',' ') }}</td>
+        <td><strong>{{ item.collection_name or "Fetched logs" }}</strong><br><small>{{ item.source or "fetch" }}</small></td>
         <td><code>{{ item.transaction_id }}</code></td>
         <td>{{ item.row_count }}</td>
         <td>{{ item.downloads|length }}</td>
-        <td>
-          {% for level, count in item.summary.levels.items() %}<span class="level-chip level-{{ level|lower }}">{{ level }} {{ count }}</span>{% endfor %}
+        <td>{% if item.failed_count %}<span class="level-chip level-warn">{{ item.failed_count }}</span>{% else %}-{% endif %}</td>
+        <td>{% for level, count in item.summary.levels.items() %}<span class="level-chip level-{{ level|lower }}">{{ level }} {{ count }}</span>{% endfor %}</td>
+        <td class="actions-cell">
+          <a class="table-action" href="/results/{{ item.transaction_id }}">Open</a>
+          <a class="table-action" href="/results/{{ item.transaction_id }}/download-all">Download all</a>
+          <form method="post" action="/collections/{{ item.transaction_id }}/delete" onsubmit="return confirm('Delete this collection?');"><button class="danger-button">Delete</button></form>
         </td>
-        <td><a class="table-action" href="/results/{{ item.transaction_id }}">Open</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="empty">No collections have been saved yet.</td></tr>
+      <tr><td colspan="8" class="empty">No collections have been saved yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

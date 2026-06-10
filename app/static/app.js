@@ -53,8 +53,8 @@
         msg.textContent = job.message || 'Fetching logs...';
         count.textContent = `${current} / ${total}`;
         addLine(job.message);
-        if (job.status === 'complete' && job.result_url) {
-          addLine('Opening result view...');
+        if ((job.status === 'complete' || job.status === 'complete_with_warnings') && job.result_url) {
+          addLine(job.status === 'complete_with_warnings' ? 'Opening result view with warnings...' : 'Opening result view...');
           setTimeout(() => { window.location.href = job.result_url; }, 500);
           return;
         }

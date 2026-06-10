@@ -1,50 +1,84 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="page-head compact-head">
-  <div>
-    <p class="eyebrow">Visual log view</p>
-    <h1>Transaction {{ result.transaction_id[:12] }}...</h1>
-    <p>{{ total_rows }} parsed rows. Showing {{ shown_rows }} of {{ filtered_rows }} matching rows.</p>
+<section class="main-pane full-pane results-pane">
+  <div class="pane-titlebar compact-titlebar">
+    <div>
+      <h1>{{ result.collection_name or "Log view" }}</h1>
+      <p><span class="level-chip">{{ result.source or "fetch" }}</span> <code>{{ result.transaction_id }}</code> · {{ total_rows }} parsed rows · showing {{ offset + 1 if filtered_rows else 0 }}-{{ offset + shown_rows }} of {{ filtered_rows }}</p>
+    </div>
+    <div class="header-actions">
+      <a href="/results/{{ result.transaction_id }}/download-all" class="buttonlike primary">Download all logs</a>
+      <form method="post" action="/collections/{{ result.transaction_id }}/delete" onsubmit="return confirm('Delete this collection?');"><button class="danger-button">Delete</button></form>
+      <a href="/" class="buttonlike secondary">Collect more</a>
+    </div>
   </div>
-  <a href="/" class="buttonlike secondary">Collect more</a>
-</section>
 
-<section class="content-panel summary-strip">
-  <div><strong>{{ result.downloads|length }}</strong><span>files</span></div>
-  <div><strong>{{ result.summary.transactions }}</strong><span>transactions</span></div>
-  <div><strong>{{ total_rows }}</strong><span>rows</span></div>
-  {% for level, count in result.summary.levels.items() %}<div><strong>{{ count }}</strong><span>{{ level }}</span></div>{% endfor %}
-</section>
-
-<section class="content-panel downloads-panel">
-  <h2>Downloads</h2>
-  <div class="downloads">
-    {% for name in downloads.keys() %}<a class="download-link" href="/results/{{ result.transaction_id }}/download/{{ name }}">{{ name }}</a>{% endfor %}
+  <div class="stats-row thin-stats">
+    <div><strong>{{ result.downloads|length }}</strong><span>files</span></div>
+    <div><strong>{{ result.summary.transactions }}</strong><span>transactions</span></div>
+    <div><strong>{{ total_rows }}</strong><span>rows</span></div>
+    {% for level, count in result.summary.levels.items() %}<div><strong>{{ count }}</strong><span>{{ level }}</span></div>{% endfor %}
   </div>
-</section>
 
-<form method="get" class="content-panel filterbar">
-  <input name="q" placeholder="Search message, ARERR code, user, transaction, pod, filename..." value="{{ q }}">
-  <select name="level"><option value="">All levels</option>{% for item in levels %}<option value="{{ item }}" {% if level == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select>
-  <select name="mode"><option value="combined" {% if mode == 'combined' %}selected{% endif %}>Combined</option><option value="transaction" {% if mode == 'transaction' %}selected{% endif %}>By transaction</option><option value="file" {% if mode == 'file' %}selected{% endif %}>By file</option></select>
-  <select name="transaction"><option value="">All transactions</option>{% for tx, count in transactions %}<option value="{{ tx }}" {% if selected_transaction == tx %}selected{% endif %}>{{ tx }} ({{ count }})</option>{% endfor %}</select>
-  <select name="file"><option value="">All files</option>{% for item in files %}<option value="{{ item }}" {% if selected_file == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select>
-  <select name="pod"><option value="">All pods</option>{% for item in pods %}<option value="{{ item }}" {% if selected_pod == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select>
-  <button>Apply</button>
-</form>
+  {% if result.failures %}
+  <details class="warnings-panel">
+    <summary>{{ result.failures|length }} warning(s) during collection</summary>
+    <table class="data-table compact-warning-table">
+      <thead><tr><th>Stage</th><th>Pod</th><th>File</th><th>Error</th></tr></thead>
+      <tbody>{% for failure in result.failures %}<tr><td>{{ failure.stage }}</td><td>{{ failure.pod }}</td><td>{{ failure.filename }}</td><td><code>{{ failure.error }}</code></td></tr>{% endfor %}</tbody>
+    </table>
+  </details>
+  {% endif %}
 
-{% macro log_table(rows) -%}
-<table class="data-table log-table">
-  <thead><tr><th>Time</th><th>Level</th><th>Pod</th><th>File</th><th>TrID / User</th><th>Message</th></tr></thead>
+  <details class="downloads-panel slim-details">
+    <summary>Individual downloads</summary>
+    <div class="downloads">
+      {% for name in downloads.keys() %}<a class="download-link" href="/results/{{ result.transaction_id }}/download/{{ name }}">{{ name }}</a>{% endfor %}
+    </div>
+  </details>
+
+  <form method="get" class="filterbar advanced-filterbar">
+    <input name="q" placeholder="Search message, ARERR, user, TrID, pod, file..." value="{{ q }}">
+    <select name="level"><option value="">All levels</option>{% for item in levels %}<option value="{{ item }}" {% if level == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select>
+    <select name="mode"><option value="combined" {% if mode == 'combined' %}selected{% endif %}>Combined</option><option value="transaction" {% if mode == 'transaction' %}selected{% endif %}>By transaction</option><option value="file" {% if mode == 'file' %}selected{% endif %}>By file</option></select>
+    <select name="transaction"><option value="">All transactions</option>{% for tx, count in transactions %}<option value="{{ tx }}" {% if selected_transaction == tx %}selected{% endif %}>{{ tx }} ({{ count }})</option>{% endfor %}</select>
+    <select name="file"><option value="">All files</option>{% for item in files %}<option value="{{ item }}" {% if selected_file == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select>
+    <select name="pod"><option value="">All pods</option>{% for item in pods %}<option value="{{ item }}" {% if selected_pod == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select>
+    <select name="tag"><option value="">All tags</option>{% for item in tags %}<option value="{{ item }}" {% if selected_tag == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select>
+    <input name="user" placeholder="User contains..." value="{{ selected_user }}">
+
+    <label class="field-label">From<input type="datetime-local" name="start_time" value="{{ start_time }}"></label>
+    <label class="field-label">To<input type="datetime-local" name="end_time" value="{{ end_time }}"></label>
+    <label class="field-label around-field">Around time<input type="datetime-local" name="around_time" value="{{ around_time }}"></label>
+    <label class="field-label tiny-field">Before min<input type="number" min="0" max="1440" name="around_before_minutes" value="{{ around_before_minutes }}"></label>
+    <label class="field-label tiny-field">After min<input type="number" min="0" max="1440" name="around_after_minutes" value="{{ around_after_minutes }}"></label>
+    <select name="limit"><option value="500" {% if limit == 500 %}selected{% endif %}>500 rows</option><option value="1000" {% if limit == 1000 %}selected{% endif %}>1000 rows</option><option value="2000" {% if limit == 2000 %}selected{% endif %}>2000 rows</option></select>
+    <button>Apply</button>
+    <a class="buttonlike secondary" href="/results/{{ result.transaction_id }}">Reset</a>
+  </form>
+
+  <div class="pager-bar">
+    {% if prev_url %}<a class="buttonlike secondary" href="{{ prev_url }}">Previous</a>{% else %}<span class="disabled">Previous</span>{% endif %}
+    {% if next_url %}<a class="buttonlike secondary" href="{{ next_url }}">Next</a>{% else %}<span class="disabled">Next</span>{% endif %}
+    <span>Offset {{ offset }} · {{ filtered_rows }} matching rows</span>
+    {% if around_time %}<span class="focus-chip">Focused around {{ around_time }} ± {{ around_before_minutes }}/{{ around_after_minutes }} min</span>{% endif %}
+  </div>
+
+{% macro log_table(items) -%}
+<table class="data-table log-table compact-log-table">
+  <thead>
+    <tr><th>Time</th><th>Level</th><th>Pod</th><th>File</th><th>Transaction / User</th><th>Message</th><th>Focus</th></tr>
+  </thead>
   <tbody>
-  {% for row in rows %}
-    <tr class="level-row-{{ row.level|lower }}">
-      <td class="mono">{{ row.display_ts or '-' }}</td>
+  {% for row in items %}
+    <tr>
+      <td class="mono no-wrap"><a title="Show lines around this time" href="?mode={{ mode }}&around_time={{ row.sort_ts.isoformat()|urlencode }}&around_before_minutes=5&around_after_minutes=5{% if selected_file %}&file={{ selected_file }}{% endif %}{% if selected_pod %}&pod={{ selected_pod }}{% endif %}">{{ row.display_ts or '-' }}</a></td>
       <td>{% if row.level %}<span class="level-chip level-{{ row.level|lower }}">{{ row.level }}</span>{% else %}-{% endif %}</td>
       <td>{{ row.pod }}</td>
       <td><a href="?mode={{ mode }}&file={{ row.filename }}">{{ row.filename }}</a><small>:{{ row.line_number }}</small></td>
-      <td class="mono small-cell">{% if row.transaction %}<a href="?mode=transaction&transaction={{ row.transaction }}">{{ row.transaction }}</a>{% endif %}{% if row.user %}<br>{{ row.user }}{% endif %}</td>
-      <td><pre>{{ row.message }}</pre>{% if row.ar_code or row.duration_ms or row.tags %}<div class="tags">{% if row.ar_code %}<span>{{ row.ar_code }}</span>{% endif %}{% if row.duration_ms %}<span>{{ '%.0f'|format(row.duration_ms) }} ms</span>{% endif %}{% for tag in row.tags %}<span>{{ tag }}</span>{% endfor %}</div>{% endif %}</td>
+      <td class="mono small-cell">{% if row.transaction %}<a href="?mode=transaction&transaction={{ row.transaction }}">{{ row.transaction }}</a>{% endif %}{% if row.user %}<br>{{ row.user }}{% endif %}{% if row.tid or row.rpc_id %}<br><span class="muted">TID {{ row.tid }} RPC {{ row.rpc_id }}</span>{% endif %}</td>
+      <td><pre>{{ row.message }}</pre>{% if row.ar_code or row.duration_ms or row.tags %}<div class="tags">{% if row.ar_code %}<span>{{ row.ar_code }}</span>{% endif %}{% if row.duration_ms %}<span>{{ '%.0f'|format(row.duration_ms) }} ms</span>{% endif %}{% for tag in row.tags %}<a href="?tag={{ tag }}">{{ tag }}</a>{% endfor %}</div>{% endif %}</td>
+      <td><a class="mini-action" href="?around_time={{ row.sort_ts.isoformat()|urlencode }}&around_before_minutes=2&around_after_minutes=2">±2m</a><a class="mini-action" href="?around_time={{ row.sort_ts.isoformat()|urlencode }}&around_before_minutes=10&around_after_minutes=10">±10m</a></td>
     </tr>
   {% endfor %}
   </tbody>
@@ -52,14 +86,11 @@
 {%- endmacro %}
 
 {% if mode == 'file' %}
-  {% for filename, group in by_file.items() %}
-  <section class="content-panel group-panel"><h2>{{ filename }} <small>{{ group|length }} rows</small></h2>{{ log_table(group) }}</section>
-  {% endfor %}
+  {% for filename, group in by_file.items() %}<section class="group-panel"><h2>{{ filename }} <small>{{ group|length }} rows in this page</small></h2>{{ log_table(group) }}</section>{% endfor %}
 {% elif mode == 'transaction' %}
-  {% for tx, group in by_transaction.items() %}
-  <section class="content-panel group-panel"><h2>{{ tx }} <small>{{ group|length }} rows</small></h2>{{ log_table(group) }}</section>
-  {% endfor %}
+  {% for tx, group in by_transaction.items() %}<section class="group-panel"><h2>{{ tx }} <small>{{ group|length }} rows in this page</small></h2>{{ log_table(group) }}</section>{% endfor %}
 {% else %}
-<section class="content-panel group-panel">{{ log_table(rows) }}</section>
+<section class="group-panel">{{ log_table(rows) }}</section>
 {% endif %}
+</section>
 {% endblock %}

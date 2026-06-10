@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="progress-card" data-job-id="{{ job.transaction_id }}">
-  <img src="/static/app-icon.png" alt="" class="progress-icon">
+  <div class="progress-icon-wrap"><img src="/static/progress-icon.png" alt="" class="progress-icon"></div>
   <p class="eyebrow">Fetching logs...</p>
   <h1 id="progressMessage">{{ job.message }}</h1>
   <div class="progress-track"><div class="progress-fill" id="progressFill" style="width: 0%"></div></div>

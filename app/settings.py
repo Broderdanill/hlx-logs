@@ -21,6 +21,15 @@ class ArSettings:
 
 
 @dataclass
+class SecuritySettings:
+    require_admin_group: bool = True
+    user_form: str = "User"
+    login_field: str = "Login Name"
+    group_list_field: str = "Group List"
+    admin_group_id: str = "1"
+
+
+@dataclass
 class StorageSettings:
     data_dir: str = "/data"
     retention_days: int = 5
@@ -55,6 +64,7 @@ class AppConfig:
     pods: list[PodConfig]
     log_types: list[LogTypeConfig]
     storage: StorageSettings = field(default_factory=StorageSettings)
+    security: SecuritySettings = field(default_factory=SecuritySettings)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -88,6 +98,15 @@ def load_config(path: str | Path) -> AppConfig:
         retention_days=int(os.getenv("RETENTION_DAYS", storage_data.get("retention_days", 5))),
     )
 
+    security_data = data.get("security", {})
+    security = SecuritySettings(
+        require_admin_group=_env_bool("REQUIRE_ADMIN_GROUP", bool(security_data.get("require_admin_group", True))),
+        user_form=os.getenv("AR_USER_FORM", security_data.get("user_form", "User")),
+        login_field=os.getenv("AR_LOGIN_FIELD", security_data.get("login_field", "Login Name")),
+        group_list_field=os.getenv("AR_GROUP_LIST_FIELD", security_data.get("group_list_field", "Group List")),
+        admin_group_id=os.getenv("AR_ADMIN_GROUP_ID", str(security_data.get("admin_group_id", "1"))),
+    )
+
     pods = [PodConfig(**item) for item in data.get("pods", [])]
     log_types = [LogTypeConfig(**item) for item in data.get("log_types", [])]
-    return AppConfig(ar=ar, pods=pods, log_types=log_types, storage=storage)
+    return AppConfig(ar=ar, pods=pods, log_types=log_types, storage=storage, security=security)

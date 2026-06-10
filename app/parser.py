@@ -22,6 +22,7 @@ ANGLE_RE = re.compile(r"<(?P<key>[A-Za-z0-9 _-]+):\s*(?P<val>[^>]*)>")
 MONITOR_HEAD_RE = re.compile(r"^<(?P<source>[A-Z]+)>\s*<TNAME:\s*(?P<tname>[^>]*)>\s*<(?P<level>[^>]*)>\s*<(?P<component>[^>]*)>\s*<(?P<location>[^>]*)>")
 DURATION_RE = re.compile(r"\b(?P<kind>API|SQL|Filter|Escalation)\[(?P<duration>[0-9.]+)\s*(?P<unit>seconds?|secs?|ms|milliseconds?)?\]", re.IGNORECASE)
 JAVA_EXCEPTION_RE = re.compile(r"\b(?P<exception>[A-Za-z0-9_.]+(?:Exception|Error))\b")
+AR_OPERATION_RE = re.compile(r"\b(GetListEntry|GetEntry|SetEntry|CreateEntry|DeleteEntry|MergeEntry|ExecuteProcess|ServiceEntry|Query|Login|Logout)\b", re.IGNORECASE)
 
 
 @dataclass
@@ -160,10 +161,12 @@ def infer_tags(line: str, filename: str, fields: dict[str, str]) -> list[str]:
         "sql": ["sql", "select ", "update ", "insert ", "delete "],
         "filter": ["filter", "workflow"],
         "api": ["<api", " api[", "client_rpc", "rpc id", "getlist", "getentry", "setentry"],
-        "plugin": ["plugin", "java", "arjavaplugin"],
-        "startup": ["armonitor", "restart", "started", "stopped", "extension loaded", "executing process"],
-        "exception": ["exception", "stacktrace", "caused by", "frameworkevent error"],
-        "performance": ["elapsed time", "threshold", "seconds]", " api["],
+        "plugin": ["plugin", "java", "arjavaplugin", "pluginsvr", "classnotfoundexception"],
+        "startup": ["armonitor", "restart", "started", "stopped", "extension loaded", "executing process", "processmonitor"],
+        "exception": ["exception", "stacktrace", "caused by", "frameworkevent error", "classnotfoundexception", "illegalstateexception"],
+        "performance": ["elapsed time", "threshold", "seconds]", " api[", "duration", "exceeded"],
+        "auth": ["login", "authentication", "token", "auth-token"],
+        "fts": ["fts", "full text", "elasticsearch", "index queue"],
         "server-group": ["server group", "arhgroup", "ranking", "operation ranking"],
     }
     for tag, needles in checks.items():
@@ -205,19 +208,35 @@ def parse_log_text(text: str, pod: str, filename: str, source_path: str) -> list
             operation = "SQL"
         elif "Filter" in raw:
             operation = "Filter"
+        else:
+            op_match = AR_OPERATION_RE.search(raw)
+            if op_match:
+                operation = op_match.group(1)
         exception_match = JAVA_EXCEPTION_RE.search(raw)
         tags = infer_tags(raw, filename, fields)
         if exception_match and "exception" not in tags:
             tags.append("exception")
 
-        is_continuation = current and not display and (
-            raw.startswith(" ") or raw.startswith("\t") or raw.startswith("at ") or raw.startswith("Caused by:") or raw == ""
+        # AR logs often wrap Java exceptions and stack traces across lines. Treat
+        # no-timestamp rows as continuations when they look like stack trace lines
+        # or when they directly follow a timestamped row in known multi-line logs.
+        is_stackish = (
+            raw.startswith(" ") or raw.startswith("\t") or raw.startswith("at ") or
+            raw.startswith("Caused by:") or raw.startswith("Suppressed:") or raw == "" or
+            bool(exception_match)
         )
+        known_multiline = filename in {"ardebug.log", "arexception.log", "arjavaplugin.log", "aruser.log", "armonitor.log"}
+        is_new_header = raw.startswith("<") or bool(GENERIC_TS_RE.search(raw)) or bool(ISO_TS_RE.search(raw)) or bool(MONITOR_TS_RE.search(raw))
+        is_continuation = bool(current and not display and (is_stackish or (known_multiline and not is_new_header)))
         if is_continuation:
             current.message += "\n" + raw
             current.raw += "\n" + raw
             if "exception" in tags and "exception" not in current.tags:
                 current.tags.append("exception")
+            if duration_ms and current.duration_ms is None:
+                current.duration_ms = duration_ms
+            if ar_code and not current.ar_code:
+                current.ar_code = ar_code
             continue
 
         message = clean_message(raw)

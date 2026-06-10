@@ -1,70 +1,74 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="page-head">
-  <div>
-    <p class="eyebrow">Helix log explorer</p>
-    <h1>Collect AR Server logs</h1>
-    <p>Signed in as <strong>{{ username }}</strong>. Requests are sent to <code>{{ ar.form_name }}</code> at <code>{{ ar.base_url }}</code>.</p>
-  </div>
-  <button form="collectForm" class="primary">Fetch selected logs</button>
-</section>
-
-<section class="workspace">
-  <aside class="sidebar-panel">
-    <h2>Collections</h2>
-    <p>Saved for {{ storage.retention_days }} days.</p>
-    <div class="mini-list">
+<section class="shell">
+  <aside class="left-rail">
+    <h3>Collections</h3>
+    <p>Temporary in-pod storage. Retention {{ storage.retention_days }} days.</p>
+    <div class="rail-list">
       {% for item in recent %}
-      <a class="mini-row" href="/results/{{ item.transaction_id }}">
-        <strong>{{ item.created_at[:19].replace('T',' ') }}</strong>
-        <span>{{ item.row_count }} rows · {{ item.downloads|length }} files</span>
-      </a>
+      <div class="rail-row">
+        <a href="/results/{{ item.transaction_id }}">
+          <strong>{{ item.created_at[:19].replace('T',' ') }}</strong>
+          <span>{{ item.row_count }} rows · {{ item.downloads|length }} files{% if item.failed_count %} · {{ item.failed_count }} failed{% endif %}</span>
+        </a>
+        <form method="post" action="/collections/{{ item.transaction_id }}/delete" onsubmit="return confirm('Delete this collection?');">
+          <button class="icon-button" title="Delete">×</button>
+        </form>
+      </div>
       {% else %}
       <div class="empty">No collections yet.</div>
       {% endfor %}
     </div>
   </aside>
 
-  <form id="collectForm" method="post" action="/collect" class="content-panel selector-shell">
-    <div class="toolbar">
-      <input type="search" id="selectorSearch" placeholder="Filter pods and logs...">
-      <button type="button" class="secondary" data-preset="core">Core AR</button>
-      <button type="button" class="secondary" data-preset="performance">Performance</button>
-      <button type="button" class="secondary" data-preset="plugin">Plugin</button>
-      <button type="button" class="secondary" data-preset="all">All</button>
-      <button type="button" class="secondary" data-preset="none">Clear</button>
+  <section class="main-pane">
+    <div class="pane-titlebar">
+      <div>
+        <h1>Collect logs</h1>
+        <p>Signed in as <strong>{{ username }}</strong>. Requests go to <code>{{ ar.form_name }}</code> at <code>{{ ar.base_url }}</code>.</p>
+      </div>
+      <div class="header-actions"><a href="/upload" class="buttonlike secondary">Upload collection</a><button form="collectForm" class="primary">Fetch selected logs</button></div>
     </div>
 
-    <div class="split-selectors">
-      <section>
-        <h2>Pods</h2>
-        <div class="dense-list" data-filter-area>
-        {% for pod in pods if pod.enabled %}
-          <label class="dense-row" data-search="{{ pod.id }} {{ pod.label }} {{ pod.tags|join(' ') }}">
-            <input type="checkbox" name="pod_ids" value="{{ pod.id }}" {% if loop.first %}checked{% endif %}>
-            <span class="row-main">{{ pod.label }}</span>
-            <code>{{ pod.id }}</code>
-            <small>{{ pod.tags|join(' · ') }}</small>
-          </label>
-        {% endfor %}
-        </div>
-      </section>
-
-      <section>
-        <h2>Log types</h2>
-        <div class="dense-table" data-filter-area>
-        {% for log in log_types if log.enabled %}
-          <label class="log-row" data-preset-tags="{{ log.parser }} {{ log.category|lower }} {{ log.id }}" data-search="{{ log.id }} {{ log.label }} {{ log.filename }} {{ log.directory }} {{ log.category }} {{ log.description }}">
-            <input type="checkbox" name="log_type_ids" value="{{ log.id }}" {% if loop.index <= 4 %}checked{% endif %}>
-            <span class="row-main">{{ log.label }}</span>
-            <code>{{ log.filename }}</code>
-            <span class="category">{{ log.category }}</span>
-            <small>{{ log.description }}</small>
-          </label>
-        {% endfor %}
-        </div>
-      </section>
-    </div>
-  </form>
+    <form id="collectForm" method="post" action="/collect" class="selector-shell">
+      <div class="toolbar">
+        <input type="search" id="selectorSearch" placeholder="Name, filename, pod...">
+        <button type="button" class="secondary" data-preset="core">Core AR</button>
+        <button type="button" class="secondary" data-preset="performance">Performance</button>
+        <button type="button" class="secondary" data-preset="plugin">Plugin</button>
+        <button type="button" class="secondary" data-preset="all">All</button>
+        <button type="button" class="secondary" data-preset="none">Clear</button>
+      </div>
+      <div class="split-selectors compact">
+        <section>
+          <h2>Pods</h2>
+          <div class="dense-list" data-filter-area>
+          {% for pod in pods if pod.enabled %}
+            <label class="dense-row" data-search="{{ pod.id }} {{ pod.label }} {{ pod.tags|join(' ') }}">
+              <input type="checkbox" name="pod_ids" value="{{ pod.id }}" {% if loop.first %}checked{% endif %}>
+              <span class="row-main">{{ pod.label }}</span>
+              <code>{{ pod.id }}</code>
+              <small>{{ pod.tags|join(' · ') }}</small>
+            </label>
+          {% endfor %}
+          </div>
+        </section>
+        <section>
+          <h2>Log types</h2>
+          <div class="dense-table" data-filter-area>
+          {% for log in log_types if log.enabled %}
+            <label class="log-row" data-preset-tags="{{ log.parser }} {{ log.category|lower }} {{ log.id }}" data-search="{{ log.id }} {{ log.label }} {{ log.filename }} {{ log.directory }} {{ log.category }} {{ log.description }}">
+              <input type="checkbox" name="log_type_ids" value="{{ log.id }}" {% if loop.index <= 4 %}checked{% endif %}>
+              <span class="row-main">{{ log.label }}</span>
+              <code>{{ log.filename }}</code>
+              <span class="category">{{ log.category }}</span>
+              <small>{{ log.description }}</small>
+            </label>
+          {% endfor %}
+          </div>
+        </section>
+      </div>
+    </form>
+  </section>
 </section>
 {% endblock %}

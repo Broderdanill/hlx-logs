@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from urllib.parse import quote
+import re
 
 import httpx
 
@@ -88,6 +89,38 @@ class ArClient:
             logger.debug("AR logout request failed", exc_info=True)
         finally:
             self.jwt = None
+
+
+    async def user_is_member_of_group(self, *, username: str, user_form: str = "User", login_field: str = "Login Name", group_list_field: str = "Group List", group_id: str = "1") -> bool:
+        """Return True when the authenticated user record contains group_id.
+
+        This uses AR REST with the JWT that was just created. The default
+        configuration checks the classic User form and Group List field for
+        Administrator group id 1. Group List values vary between environments
+        (semicolon separated, space separated, or display values), so parsing is
+        intentionally tolerant and only matches complete numeric tokens.
+        """
+        form = quote(user_form, safe="")
+        safe_user = username.replace('"', '\"')
+        q = f"'{login_field}' = \"{safe_user}\""
+        fields = f"values({group_list_field})"
+        try:
+            response = await self.client.get(
+                f"/api/arsys/v1/entry/{form}",
+                params={"q": q, "fields": fields, "limit": "1"},
+                headers=self._headers(),
+            )
+        except httpx.RequestError as exc:
+            raise _friendly_request_error(exc, self.settings.base_url) from exc
+        if response.status_code >= 400:
+            raise ArRestError(f"Admin group verification failed: HTTP {response.status_code}: {response.text[:1000]}")
+        entries = response.json().get("entries", [])
+        if not entries:
+            return False
+        values = entries[0].get("values", {})
+        group_value = str(values.get(group_list_field, ""))
+        tokens = re.findall(r"\d+", group_value)
+        return str(group_id) in tokens
 
     async def create_log_request(self, pod: str, directory: str, filename: str, transaction_id: str) -> str | None:
         form = quote(self.settings.form_name, safe="")

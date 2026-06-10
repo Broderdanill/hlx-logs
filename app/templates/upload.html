@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="main-pane full-pane">
+  <div class="pane-titlebar">
+    <div>
+      <h1>Upload collection</h1>
+      <p>Upload your own log files or zip archives. Recognized AR log filenames are parsed into a normal collection.</p>
+    </div>
+    <a href="/collections" class="buttonlike secondary">Collections</a>
+  </div>
+
+  <form method="post" action="/upload" enctype="multipart/form-data" class="upload-panel">
+    <div class="form-grid compact-form">
+      <label>
+        <span>Collection name</span>
+        <input name="collection_name" placeholder="Example: customer case 2026-06-10">
+      </label>
+      <label>
+        <span>Default pod/source</span>
+        <input name="default_pod" value="uploaded" placeholder="uploaded">
+      </label>
+    </div>
+
+    <label class="drop-zone">
+      <input type="file" name="files" multiple required accept=".log,.txt,.out,.zip,.gz">
+      <span class="drop-title">Drop log files or zip archives here</span>
+      <span class="drop-subtitle">Multiple files are supported. Zip archives may contain log files directly or nested zip attachments.</span>
+    </label>
+
+    <div class="help-card compact-help">
+      <strong>Filename recognition</strong>
+      <p>Files such as <code>arerror.log</code>, <code>ardebug.log</code>, <code>arexception.log</code>, <code>armonitor.log</code>, <code>arjavaplugin.log</code> and other configured AR log names are automatically tagged with their log type. Unknown filenames are still loaded as generic logs.</p>
+    </div>
+
+    <div class="form-actions">
+      <button class="primary">Create collection from upload</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
