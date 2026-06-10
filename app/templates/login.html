@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Login · hlx-logs</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="login-bg">
+  <main class="login-card">
+    <h1>hlx-logs</h1>
+    <p>Login with your Helix / AR System credentials. The application stores only the AR-JWT token in your session.</p>
+    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+    <form method="post" action="/login" class="stack">
+      <label>AR REST base URL <input value="{{ base_url }}" disabled></label>
+      <label>Username <input name="username" autocomplete="username" required autofocus></label>
+      <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="primary">Login</button>
+    </form>
+  </main>
+</body>
+</html>

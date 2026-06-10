@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <h1>Transaction {{ result.transaction_id }}</h1>
+  <p>{{ total_rows }} parsed rows. Showing {{ shown_rows }} of {{ filtered_rows }} matching rows.</p>
+</section>
+<section class="panel">
+  <h2>Downloads</h2>
+  <div class="downloads">
+    {% for name in result.downloads.keys() %}<a class="pill" href="/results/{{ result.transaction_id }}/download/{{ name }}">{{ name }}</a>{% endfor %}
+  </div>
+</section>
+<form method="get" class="panel filterbar">
+  <input name="q" placeholder="Search message, pod, filename..." value="{{ q }}">
+  <select name="level"><option value="">All levels</option>{% for item in levels %}<option value="{{ item }}" {% if level == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select>
+  <button>Search</button>
+</form>
+<section class="logview">
+  {% for row in rows %}
+    <article class="logline level-{{ row.level|lower }}">
+      <span class="ts">{{ row.display_ts or 'no timestamp' }}</span>
+      <span class="level">{{ row.level or '-' }}</span>
+      <span class="pod">{{ row.pod }}</span>
+      <span class="file">{{ row.filename }}:{{ row.line_number }}</span>
+      <pre>{{ row.message }}</pre>
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}

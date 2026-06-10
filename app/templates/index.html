@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <h1>Collect Helix logs</h1>
+  <p>Signed in as <strong>{{ username }}</strong>. Requests will be sent to <code>{{ ar.form_name }}</code> at <code>{{ ar.base_url }}</code>.</p>
+</section>
+<form method="post" action="/collect" class="panel grid2">
+  <section>
+    <h2>Pods</h2>
+    {% for pod in pods if pod.enabled %}
+      <label class="check"><input type="checkbox" name="pod_ids" value="{{ pod.id }}"> <span>{{ pod.label }}</span><code>{{ pod.id }}</code></label>
+    {% endfor %}
+  </section>
+  <section>
+    <h2>Logs</h2>
+    {% for log in log_types if log.enabled %}
+      <label class="check"><input type="checkbox" name="log_type_ids" value="{{ log.id }}"> <span>{{ log.label }}</span><code>{{ log.directory }}/{{ log.filename }}</code></label>
+    {% endfor %}
+  </section>
+  <div class="actions full"><button class="primary">Fetch selected logs</button></div>
+</form>
+<section class="panel">
+  <h2>Availability</h2>
+  <div class="cards">
+  {% for log in log_types if log.enabled %}
+    <div class="mini-card"><strong>{{ log.label }}</strong><small>{{ log.filename }}</small><p>Available on: {{ availability[log.id] | join(', ') }}</p></div>
+  {% endfor %}
+  </div>
+</section>
+{% endblock %}

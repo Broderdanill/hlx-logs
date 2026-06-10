@@ -1,0 +1,38 @@
+ar:
+  # Can be overridden with AR_BASE_URL env var, for example http://platform-user-ext:8008
+  base_url: "http://platform-user-ext:8008"
+  form_name: "HLX:Logs"
+  attachment_field: "ZipFile"
+  verify_tls: false
+  request_timeout_seconds: 60
+  poll_interval_seconds: 2
+  poll_timeout_seconds: 60
+  # How to query generated result entries after POST. {transaction_id} is replaced automatically.
+  # Field names here assume the same names as in the create payload.
+  result_query_template: "'TransactionId' = \"{transaction_id}\""
+
+pods:
+  - id: "arserver.sandbox"
+    label: "AR Server sandbox"
+    enabled: true
+    tags: ["arserver", "sandbox"]
+  - id: "platform-fts"
+    label: "Platform FTS"
+    enabled: true
+    tags: ["fts"]
+
+log_types:
+  - id: "arerror"
+    label: "AR error log"
+    filename: "arerror.log"
+    directory: "/opt/bmc/ARSystem/db"
+    available_on_tags: ["arserver", "fts"]
+    enabled: true
+    parser: "generic"
+  - id: "arjavaplugin"
+    label: "Java plugin log"
+    filename: "arjavaplugin.log"
+    directory: "/opt/bmc/ARSystem/db"
+    available_on_tags: ["arserver"]
+    enabled: true
+    parser: "generic"

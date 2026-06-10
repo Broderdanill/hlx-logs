@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Runtime configuration</h1>
+<p>Changes here live only in this running container session. Persistent defaults are loaded from the ConfigMap-mounted YAML file.</p>
+<div class="grid2">
+  <section class="panel">
+    <h2>Pods</h2>
+    <table><tr><th>ID</th><th>Label</th><th>Tags</th></tr>{% for pod in pods %}<tr><td><code>{{ pod.id }}</code></td><td>{{ pod.label }}</td><td>{{ pod.tags|join(', ') }}</td></tr>{% endfor %}</table>
+    <form method="post" action="/config/pods" class="stack">
+      <h3>Add / replace pod</h3>
+      <input name="pod_id" placeholder="arserver.sandbox" required>
+      <input name="label" placeholder="AR Server sandbox" required>
+      <input name="tags" placeholder="arserver,sandbox">
+      <button>Add pod</button>
+    </form>
+  </section>
+  <section class="panel">
+    <h2>Log types</h2>
+    <table><tr><th>ID</th><th>File</th><th>Directory</th><th>Tags</th><th>Pods</th></tr>{% for log in log_types %}<tr><td><code>{{ log.id }}</code></td><td>{{ log.filename }}</td><td><code>{{ log.directory }}</code></td><td>{{ log.available_on_tags|join(', ') }}</td><td>{{ log.available_on_pods|join(', ') }}</td></tr>{% endfor %}</table>
+    <form method="post" action="/config/log-types" class="stack">
+      <h3>Add / replace log type</h3>
+      <input name="log_id" placeholder="arerror" required>
+      <input name="label" placeholder="AR error log" required>
+      <input name="filename" placeholder="arerror.log" required>
+      <input name="directory" placeholder="/opt/bmc/ARSystem/db" required>
+      <input name="available_on_tags" placeholder="arserver,fts">
+      <input name="available_on_pods" placeholder="optional exact pod ids, comma separated">
+      <button>Add log type</button>
+    </form>
+  </section>
+</div>
+{% endblock %}
