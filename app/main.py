@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import uuid
 from urllib.parse import urlencode
+import re
 import io
 import zipfile
 import gzip
@@ -21,9 +22,11 @@ from starlette.middleware.sessions import SessionMiddleware
 from .ar_client import ArClient, ArRestError, _entry_id_from_links
 from .logging_config import configure_logging
 from .parser import LogLine
+from .log_analysis import rows_from_downloads, filter_rows, summarize_facets, build_flow, build_flow_from_dicts, build_mermaid_swimlane, workflow_event_kind, WORKFLOW_TYPE_ORDER, WORKFLOW_TYPE_LABELS
 from .runtime_config import RuntimeConfig
 from .settings import load_config, PodConfig, LogTypeConfig
 from .storage import CollectionStore
+from .log_classifier import classify_log_file
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -34,7 +37,7 @@ runtime_config = RuntimeConfig(config)
 store = CollectionStore(config.storage)
 store.cleanup()
 
-APP_VERSION = "0.0.14"
+APP_VERSION = "0.0.28"
 
 app = FastAPI(title="hlx-logs", version=APP_VERSION)
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-only-change-me"), same_site="lax")
@@ -42,6 +45,7 @@ app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), na
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 JOBS: dict[str, dict] = {}
+DISCOVERY_LOCK = asyncio.Lock()
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -62,6 +66,153 @@ def base_context(request: Request) -> dict:
         "version": APP_VERSION,
         "username": request.session.get("username"),
     }
+
+
+
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-._")
+    return slug or "log"
+
+
+def _guess_log_category(filename: str) -> str:
+    name = filename.lower()
+    if "error" in name or "exception" in name or "uncaught" in name:
+        return "Errors"
+    if "plugin" in name or "atrium" in name or "ard2p" in name:
+        return "Plugin"
+    if "api" in name or "filter" in name or "sql" in name or "esc" in name or "debug" in name:
+        return "Trace"
+    if "monitor" in name or "startup" in name or "health" in name or "probe" in name:
+        return "Runtime"
+    if "cache" in name or "fts" in name or "search" in name:
+        return "Platform"
+    return "Discovered"
+
+
+def _guess_log_severity(filename: str) -> str:
+    name = filename.lower()
+    if "error" in name or "exception" in name or "uncaught" in name:
+        return "critical"
+    if "debug" in name or "trace" in name:
+        return "debug"
+    return "info"
+
+
+def _file_size_is_zero(value: str) -> bool:
+    normalized = (value or "").strip().lower()
+    return normalized in {"0", "0kb", "0 kb", "0.0 kb", "0 b", "0 bytes"}
+
+
+async def refresh_available_logs(jwt: str, *, force: bool = False) -> dict:
+    """Refresh pods/log files from AR REST discovery forms.
+
+    Discovery uses the user's AR-JWT, so it runs after login and whenever a
+    user opens the collect/config pages and the cache is stale. This avoids any
+    separate service credential while still keeping the available pod/log list
+    fresh for all users of the running hlx-logs pod.
+    """
+    cfg = runtime_config.get()
+    status = runtime_config.discovery_status()
+    discovery = cfg.discovery
+    if not discovery.enabled:
+        return status
+
+    if not force and status.get("last_success_at"):
+        try:
+            last = datetime.fromisoformat(status["last_success_at"])
+            if datetime.now(timezone.utc) - last < timedelta(seconds=discovery.refresh_interval_seconds):
+                return status
+        except Exception:
+            pass
+
+    async with DISCOVERY_LOCK:
+        cfg = runtime_config.get()
+        discovery = cfg.discovery
+        status = runtime_config.discovery_status()
+        if not force and status.get("last_success_at"):
+            try:
+                last = datetime.fromisoformat(status["last_success_at"])
+                if datetime.now(timezone.utc) - last < timedelta(seconds=discovery.refresh_interval_seconds):
+                    return status
+            except Exception:
+                pass
+
+        client = ArClient(cfg.ar, jwt)
+        try:
+            pod_names = await client.discover_pods(
+                form_name=discovery.pod_form_name,
+                query=discovery.pod_query,
+                value_field=discovery.pod_value_field,
+            )
+            pods = [PodConfig(id=name, label=name, tags=["discovered"]) for name in pod_names]
+            by_filename: dict[str, LogTypeConfig] = {}
+            for pod in pods:
+                log_files = await client.discover_log_files_for_pod(
+                    pod.id,
+                    form_name=discovery.log_form_name,
+                    server_field=discovery.log_server_field,
+                    filename_field=discovery.log_filename_field,
+                    size_field=discovery.log_size_field,
+                )
+                for item in log_files:
+                    filename = item.get("filename", "").strip()
+                    if not filename:
+                        continue
+                    file_size = item.get("file_size", "")
+                    if not discovery.include_zero_byte_logs and _file_size_is_zero(file_size):
+                        continue
+                    key = filename.lower()
+                    log_type = by_filename.get(key)
+                    if not log_type:
+                        classification = classify_log_file(filename, file_size)
+                        log_type = LogTypeConfig(
+                            id=_slug(filename.lower()),
+                            label=filename,
+                            filename=filename,
+                            directory=discovery.default_directory,
+                            available_on_pods=[],
+                            enabled=True,
+                            parser=classification.parser,
+                            category=classification.category,
+                            severity=classification.severity,
+                            tags=classification.tags,
+                            description=classification.description,
+                            file_sizes_by_pod={},
+                        )
+                        by_filename[key] = log_type
+                    if pod.id not in log_type.available_on_pods:
+                        log_type.available_on_pods.append(pod.id)
+                    log_type.file_sizes_by_pod[pod.id] = file_size
+            category_order = {
+                "Core AR": 0,
+                "Performance / Exceptions": 1,
+                "Combined Trace": 2,
+                "API Trace": 3,
+                "Filter Trace": 4,
+                "SQL Trace": 5,
+                "Runtime Monitor": 6,
+                "Java Plug-in Server": 7,
+                "Plug-ins": 8,
+                "REST API": 9,
+                "Web / Jetty": 10,
+                "Search / FTS / AI": 11,
+                "Deployment": 12,
+                "CMDB / Atrium": 13,
+                "Configuration / Cache": 14,
+                "Email / Notification": 15,
+                "Runtime Services": 16,
+                "Other": 99,
+            }
+            log_types = sorted(by_filename.values(), key=lambda l: (category_order.get(l.category, 50), l.filename.lower()))
+            runtime_config.replace_discovered(pods, log_types)
+            logger.info("Discovered %s pod(s) and %s log file type(s)", len(pods), len(log_types))
+        except Exception as exc:
+            runtime_config.mark_discovery_error(str(exc))
+            logger.warning("Log discovery failed: %s", exc, exc_info=True)
+        finally:
+            await client.close()
+        return runtime_config.discovery_status()
 
 
 @app.get("/healthz")
@@ -123,9 +274,9 @@ async def logout(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    require_jwt(request)
+    jwt = require_jwt(request)
+    await refresh_available_logs(jwt)
     cfg = runtime_config.get()
-    recent = store.list_collections(owner=request.session.get("username"), limit=8)
     return templates.TemplateResponse(
         "index.html",
         {
@@ -135,60 +286,59 @@ async def index(request: Request):
             "ar": cfg.ar,
             "storage": cfg.storage,
             "security": cfg.security,
-            "recent": recent,
+            "discovery": cfg.discovery,
+            "discovery_status": runtime_config.discovery_status(),
         },
     )
 
 
 @app.get("/collections", response_class=HTMLResponse)
-async def collections_page(request: Request):
+async def collections_page(request: Request, owner: str = ""):
     require_jwt(request)
-    return templates.TemplateResponse("collections.html", {**base_context(request), "collections": store.list_collections(owner=request.session.get("username"), limit=100), "storage": runtime_config.get().storage})
+    owners = store.list_owners()
+    selected_owner = owner.strip()
+    collections = store.list_collections(owner=selected_owner or None, limit=300)
+    return templates.TemplateResponse(
+        "collections.html",
+        {
+            **base_context(request),
+            "collections": collections,
+            "owners": owners,
+            "selected_owner": selected_owner,
+            "storage": runtime_config.get().storage,
+        },
+    )
 
 
 @app.get("/config", response_class=HTMLResponse)
 async def config_page(request: Request):
-    require_jwt(request)
+    jwt = require_jwt(request)
+    await refresh_available_logs(jwt)
     cfg = runtime_config.get()
-    return templates.TemplateResponse("config.html", {**base_context(request), "pods": cfg.pods, "log_types": cfg.log_types, "storage": cfg.storage})
-
-
-@app.post("/config/pods")
-async def add_pod(request: Request, pod_id: str = Form(...), label: str = Form(...), tags: str = Form("")):
-    require_jwt(request)
-    runtime_config.add_pod(PodConfig(id=pod_id.strip(), label=label.strip(), tags=[t.strip() for t in tags.split(",") if t.strip()]))
-    return RedirectResponse("/config", status_code=303)
-
-
-@app.post("/config/log-types")
-async def add_log_type(
-    request: Request,
-    log_id: str = Form(...),
-    label: str = Form(...),
-    filename: str = Form(...),
-    directory: str = Form(...),
-    available_on_tags: str = Form(""),
-    available_on_pods: str = Form(""),
-):
-    require_jwt(request)
-    runtime_config.add_log_type(
-        LogTypeConfig(
-            id=log_id.strip(),
-            label=label.strip(),
-            filename=filename.strip(),
-            directory=directory.strip(),
-            available_on_tags=[t.strip() for t in available_on_tags.split(",") if t.strip()],
-            available_on_pods=[p.strip() for p in available_on_pods.split(",") if p.strip()],
-            category="Custom",
-            description="Added at runtime",
-        )
+    return templates.TemplateResponse(
+        "config.html",
+        {
+            **base_context(request),
+            "pods": cfg.pods,
+            "log_types": cfg.log_types,
+            "storage": cfg.storage,
+            "discovery": cfg.discovery,
+            "discovery_status": runtime_config.discovery_status(),
+        },
     )
+
+
+@app.post("/config/refresh")
+async def refresh_config(request: Request):
+    jwt = require_jwt(request)
+    await refresh_available_logs(jwt, force=True)
     return RedirectResponse("/config", status_code=303)
 
 
 @app.post("/collect")
 async def collect(request: Request, background_tasks: BackgroundTasks, pod_ids: list[str] = Form(default=[]), log_type_ids: list[str] = Form(default=[])):
     jwt = require_jwt(request)
+    await refresh_available_logs(jwt)
     cfg = runtime_config.get()
     pods = [p for p in cfg.pods if p.id in pod_ids and p.enabled]
     log_types = [l for l in cfg.log_types if l.id in log_type_ids and l.enabled]
@@ -332,9 +482,9 @@ async def _collect_job(transaction_id: str, username: str, jwt: str, pair_dicts:
 
         if not raw_downloads and failures:
             raise ArRestError(f"No logs could be downloaded. {len(failures)} item(s) failed. First error: {failures[0]['error']}")
-        # Log content rendering/parsing is intentionally disabled for now.
-        # Collections store only the downloadable artifacts and request metadata.
-        store.save_collection(transaction_id, username, request_meta, [], raw_downloads, failures=failures)
+        _job_update(transaction_id, message="Analyzing downloaded logs...", step=total, total=total)
+        rows = rows_from_downloads(raw_downloads, request_meta)
+        store.save_collection(transaction_id, username, request_meta, rows, raw_downloads, failures=failures)
         if failures:
             _job_update(
                 transaction_id,
@@ -417,9 +567,12 @@ async def upload_page(request: Request):
 @app.post("/upload")
 async def upload_collection(
     request: Request,
-    files: list[UploadFile] = File(...),
+    files: list[UploadFile] = File(default=[]),
     collection_name: str = Form(""),
     default_pod: str = Form("uploaded"),
+    pasted_log_text: str = Form(""),
+    pasted_log_name: str = Form("pasted.log"),
+    pasted_log_type: str = Form("auto"),
 ):
     require_jwt(request)
     username = request.session.get("username", "unknown")
@@ -439,12 +592,16 @@ async def upload_collection(
         return f"{p.stem}_{count}{p.suffix}"
 
     for upload in files:
-        original_name = upload.filename or "uploaded.log"
+        original_name = upload.filename or ""
         try:
             blob = await upload.read()
+            # Browsers often submit an empty file part when only pasted text is provided.
+            # Treat that as no file, not as a failed upload.
             if not blob:
-                failures.append({"stage": "upload", "pod": default_pod, "filename": original_name, "error": "Uploaded file was empty"})
+                if original_name:
+                    failures.append({"stage": "upload", "pod": default_pod, "filename": original_name, "error": "Uploaded file was empty"})
                 continue
+            original_name = original_name or "uploaded.log"
             name = unique_name(original_name)
             downloads[name] = blob
             requests.append({
@@ -458,9 +615,15 @@ async def upload_collection(
             logger.warning("Upload processing failed for %s: %s", original_name, exc, exc_info=True)
             failures.append({"stage": "upload", "pod": default_pod, "filename": original_name, "error": str(exc)})
 
+    if pasted_log_text.strip():
+        name = unique_name(pasted_log_name or "pasted.log")
+        downloads[name] = pasted_log_text.encode("utf-8", errors="replace")
+        requests.append({"source": "paste", "original_upload": pasted_log_name, "stored_as": name, "pod": default_pod or "uploaded", "log_type_hint": pasted_log_type, "bytes": len(downloads[name])})
+
     if not downloads:
         return templates.TemplateResponse("error.html", {**base_context(request), "message": "No readable files were found in the upload."}, status_code=400)
-    store.save_collection(transaction_id, username, requests, [], downloads, failures=failures)
+    rows = rows_from_downloads(downloads, requests, default_pod=default_pod or "uploaded")
+    store.save_collection(transaction_id, username, requests, rows, downloads, failures=failures)
     meta_path = store.path_for(transaction_id) / "meta.json"
     try:
         import json
@@ -480,7 +643,7 @@ async def progress_page(request: Request, transaction_id: str):
     job = JOBS.get(transaction_id)
     if job and job.get("owner") and job.get("owner") != request.session.get("username"):
         return templates.TemplateResponse("error.html", {**base_context(request), "message": "Job not found."}, status_code=404)
-    if not job and store.load_collection(transaction_id, owner=request.session.get("username")):
+    if not job and store.load_collection(transaction_id, owner=None):
         return RedirectResponse(f"/results/{transaction_id}", status_code=303)
     if not job:
         return templates.TemplateResponse("error.html", {**base_context(request), "message": "Job not found."}, status_code=404)
@@ -493,7 +656,7 @@ async def job_status(request: Request, transaction_id: str):
     job = JOBS.get(transaction_id)
     if job and job.get("owner") and job.get("owner") != request.session.get("username"):
         raise HTTPException(status_code=404, detail="Job not found")
-    if not job and store.load_collection(transaction_id, owner=request.session.get("username")):
+    if not job and store.load_collection(transaction_id, owner=None):
         return {"transaction_id": transaction_id, "status": "complete", "current": 1, "total": 1, "message": "Done", "result_url": f"/results/{transaction_id}"}
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -503,23 +666,170 @@ async def job_status(request: Request, transaction_id: str):
 @app.get("/results/{transaction_id}", response_class=HTMLResponse)
 async def results(request: Request, transaction_id: str):
     require_jwt(request)
-    loaded = store.load_collection(transaction_id, owner=request.session.get("username"))
+    username = request.session.get("username")
+    loaded = store.load_collection_meta(transaction_id, owner=None)
     if not loaded:
         return templates.TemplateResponse("error.html", {**base_context(request), "message": "Collection not found. It may have expired based on retention settings."}, status_code=404)
+
+    # Backfill analysis rows for older collections created before indexing or parsing.
+    meta = loaded["meta"]
+    if int(meta.get("row_count") or 0) == 0 and loaded.get("downloads"):
+        try:
+            downloads_bytes = {name: path.read_bytes() for name, path in loaded["downloads"].items() if path.exists()}
+            rows = rows_from_downloads(downloads_bytes, meta.get("requests", []))
+            if rows:
+                store.reindex_collection(transaction_id, rows, owner=None)
+                loaded = store.load_collection_meta(transaction_id, owner=None) or loaded
+                meta = loaded["meta"]
+        except Exception:
+            logger.warning("Could not backfill log analysis rows for %s", transaction_id, exc_info=True)
+
+    params = request.query_params
+    active_tab = params.get("tab", "logs")
+    q = params.get("q", "")
+    user = params.get("user", "")
+    form_name = params.get("form", "")
+    start = params.get("start", "")
+    end = params.get("end", "")
+    file_name = params.get("file", "")
+    level = params.get("level", "")
+    ignore_failed = params.get("ignore_failed") in {"1", "true", "on", "yes"}
+    raw_wf_types = params.get("wf_types", "")
+    if raw_wf_types == "none":
+        selected_workflow_types = []
+    else:
+        selected_workflow_types = [t for t in raw_wf_types.split(",") if t in WORKFLOW_TYPE_ORDER]
+        if not selected_workflow_types:
+            selected_workflow_types = list(WORKFLOW_TYPE_ORDER)
+    try:
+        limit = min(max(int(params.get("limit", "500")), 50), 5000)
+    except ValueError:
+        limit = 500
+    allowed_columns = [
+        "time", "level", "user", "form", "event", "pod_file", "transaction", "workflow", "field", "message"
+    ]
+    raw_cols = params.get("cols", "time,message")
+    selected_columns = [c for c in raw_cols.split(",") if c in allowed_columns]
+    if not selected_columns:
+        selected_columns = ["time", "message"]
+
+    facets = store.query_facets(transaction_id, owner=None) or {"users": [], "forms": [], "files": [], "levels": [], "transactions": [], "event_types": []}
+    query = store.query_rows(
+        transaction_id,
+        owner=None,
+        q=q,
+        user=user,
+        form=form_name,
+        start=start,
+        end=end,
+        file=file_name,
+        level=level,
+        ignore_failed=ignore_failed,
+        limit=limit,
+    ) or {"total": int(meta.get("row_count") or 0), "filtered": 0, "rows": []}
+    flow_source = store.query_flow_rows(
+        transaction_id,
+        owner=None,
+        q=q,
+        user=user,
+        form=form_name,
+        start=start,
+        end=end,
+        file=file_name,
+        level=level,
+        ignore_failed=ignore_failed,
+        limit=600,
+        workflow_only=True,
+    ) or []
+    flow = build_flow_from_dicts(flow_source, limit=240)
+    flow = [event for event in flow if workflow_event_kind(event) in selected_workflow_types]
+    mermaid_code = build_mermaid_swimlane(flow, limit=80)
+
     return templates.TemplateResponse(
         "results.html",
         {
             **base_context(request),
             "result": loaded["meta"],
             "downloads": loaded["downloads"],
+            "rows": query["rows"],
+            "total_rows": query["total"],
+            "filtered_count": query["filtered"],
+            "facets": facets,
+            "flow": flow,
+            "mermaid_code": mermaid_code,
+            "active_tab": active_tab,
+            "filters": {"q": q, "user": user, "form": form_name, "start": start, "end": end, "file": file_name, "level": level, "limit": limit, "ignore_failed": ignore_failed, "wf_types": ",".join(selected_workflow_types)},
+            "workflow_type_order": WORKFLOW_TYPE_ORDER,
+            "workflow_type_labels": WORKFLOW_TYPE_LABELS,
+            "selected_workflow_types": selected_workflow_types,
+            "allowed_columns": allowed_columns,
+            "selected_columns": selected_columns,
+            "log_type_options": runtime_config.get().log_types,
         },
     )
+
+
+@app.post("/results/{transaction_id}/upload-extra")
+async def upload_extra_logs(
+    transaction_id: str,
+    request: Request,
+    files: list[UploadFile] = File(default=[]),
+    default_pod: str = Form("uploaded"),
+    pasted_log_text: str = Form(""),
+    pasted_log_name: str = Form("pasted.log"),
+    pasted_log_type: str = Form("auto"),
+):
+    require_jwt(request)
+    username = request.session.get("username", "unknown")
+    downloads: dict[str, bytes] = {}
+    requests: list[dict] = []
+    failures: list[dict] = []
+    seen: dict[str, int] = {}
+
+    def unique_name(name: str) -> str:
+        safe = name.replace("/", "__").replace("\\", "__").strip() or "uploaded.log"
+        count = seen.get(safe, 0) + 1
+        seen[safe] = count
+        if count == 1:
+            return safe
+        pp = Path(safe)
+        return f"{pp.stem}_{count}{pp.suffix}"
+
+    for upload in files:
+        original_name = upload.filename or ""
+        try:
+            blob = await upload.read()
+            # Browsers often submit an empty file part when only pasted text is provided.
+            # Treat that as no file, not as a failed upload.
+            if not blob:
+                if original_name:
+                    failures.append({"stage": "upload", "pod": default_pod, "filename": original_name, "error": "Uploaded file was empty"})
+                continue
+            original_name = original_name or "uploaded.log"
+            name = unique_name(original_name)
+            downloads[name] = blob
+            requests.append({"source": "upload-extra", "original_upload": original_name, "stored_as": name, "pod": default_pod or "uploaded", "bytes": len(blob)})
+        except Exception as exc:
+            failures.append({"stage": "upload", "pod": default_pod, "filename": original_name, "error": str(exc)})
+
+    if pasted_log_text.strip():
+        name = unique_name(pasted_log_name or "pasted.log")
+        downloads[name] = pasted_log_text.encode("utf-8", errors="replace")
+        requests.append({"source": "paste-extra", "original_upload": pasted_log_name, "stored_as": name, "pod": default_pod or "uploaded", "log_type_hint": pasted_log_type, "bytes": len(downloads[name])})
+
+    if not downloads:
+        return templates.TemplateResponse("error.html", {**base_context(request), "message": "No readable uploaded or pasted log content was provided."}, status_code=400)
+
+    rows = rows_from_downloads(downloads, requests, default_pod=default_pod or "uploaded")
+    if not store.extend_collection(transaction_id, owner=None, requests=requests, rows=rows, downloads=downloads, failures=failures):
+        raise HTTPException(status_code=404, detail="Collection not found")
+    return RedirectResponse(f"/results/{transaction_id}?tab=logs", status_code=303)
 
 
 @app.get("/results/{transaction_id}/download/{name}")
 async def download(transaction_id: str, name: str, request: Request):
     require_jwt(request)
-    path = store.download_path(transaction_id, name, owner=request.session.get("username"))
+    path = store.download_path(transaction_id, name, owner=None)
     if not path:
         raise HTTPException(status_code=404, detail="Download not found")
     return FileResponse(path, media_type="application/zip", filename=name)
@@ -528,17 +838,26 @@ async def download(transaction_id: str, name: str, request: Request):
 @app.get("/results/{transaction_id}/download-all")
 async def download_all(transaction_id: str, request: Request):
     require_jwt(request)
-    blob = store.build_all_logs_zip(transaction_id, owner=request.session.get("username"))
+    blob = store.build_all_logs_zip(transaction_id, owner=None)
     if not blob:
         raise HTTPException(status_code=404, detail="No downloadable logs found")
     filename = f"hlx-logs-{transaction_id[:12]}.zip"
     return StreamingResponse(io.BytesIO(blob), media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
+@app.post("/collections/{transaction_id}/rename")
+async def rename_collection(transaction_id: str, request: Request, collection_name: str = Form("")):
+    require_jwt(request)
+    ok = store.rename_collection(transaction_id, collection_name.strip(), owner=None)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    return RedirectResponse(f"/results/{transaction_id}", status_code=303)
+
+
 @app.post("/collections/{transaction_id}/delete")
 async def delete_collection(transaction_id: str, request: Request):
     require_jwt(request)
-    ok = store.delete_collection(transaction_id, owner=request.session.get("username"))
+    ok = store.delete_collection(transaction_id, owner=None)
     if not ok:
         raise HTTPException(status_code=404, detail="Collection not found")
     referer = request.headers.get("referer") or "/collections"

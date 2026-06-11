@@ -1,25 +1,34 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="main-pane full-pane results-pane">
+<section class="main-pane full-pane results-pane analysis-results">
   <div class="pane-titlebar compact-titlebar">
     <div>
       <h1>{{ result.collection_name or "Collected logs" }}</h1>
       <p>
         <span class="level-chip">{{ result.source or "fetch" }}</span>
         <code>{{ result.transaction_id }}</code>
+        · owner <span class="owner-chip">{{ result.owner or 'unknown' }}</span>
         · {{ result.downloads|length }} downloadable file(s)
+        · {{ total_rows }} parsed row(s)
         {% if result.failed_count %} · {{ result.failed_count }} warning(s){% endif %}
       </p>
+      <form method="post" action="/collections/{{ result.transaction_id }}/rename" class="rename-collection-form" data-no-loading="true">
+        <label>Collection name
+          <input name="collection_name" value="{{ result.collection_name or '' }}" placeholder="Add a friendly name...">
+        </label>
+        <button class="secondary" type="submit">Save name</button>
+      </form>
     </div>
     <div class="header-actions">
-      <a href="/results/{{ result.transaction_id }}/download-all" class="buttonlike primary">Download all logs</a>
-      <form method="post" action="/collections/{{ result.transaction_id }}/delete" onsubmit="return confirm('Delete this collection?');"><button class="danger-button">Delete</button></form>
-      <a href="/" class="buttonlike secondary">Collect more</a>
+      <a href="/results/{{ result.transaction_id }}/download-all" class="buttonlike primary"><span class="btn-icon">↓</span> Download all logs</a>
+      <form method="post" action="/collections/{{ result.transaction_id }}/delete" onsubmit="return confirm('Delete this collection?');"><button class="danger-button"><span class="btn-icon">×</span> Delete</button></form>
+      <button type="button" class="secondary" data-toggle-upload><span class="btn-icon">↑</span> Upload / paste logs</button>
+      <a href="/" class="buttonlike secondary"><span class="btn-icon">+</span> Collect more</a>
     </div>
   </div>
 
   {% if result.failures %}
-  <details class="warnings-panel" open>
+  <details class="warnings-panel">
     <summary>{{ result.failures|length }} warning(s) during collection</summary>
     <table class="data-table compact-warning-table">
       <thead><tr><th>Stage</th><th>Pod</th><th>File</th><th>Error</th></tr></thead>
@@ -28,31 +37,212 @@
   </details>
   {% endif %}
 
+  <section class="top-upload-panel" id="uploadMorePanel" hidden>
+    <form method="post" action="/results/{{ result.transaction_id }}/upload-extra" enctype="multipart/form-data" class="extra-upload-form compact-extra-upload-form paste-capable-form">
+      <label class="field-label">Default pod/source<input name="default_pod" value="uploaded"></label>
+      <label class="field-label wide-field">Additional log files or zip archives<input type="file" name="files" multiple></label>
+      <label class="field-label">Log type if unknown
+        <select name="pasted_log_type">
+          <option value="auto">Auto-detect</option>
+          <option value="active-link">Active Link</option>
+          <option value="progressive-active-link">Progressive Active Link</option>
+          <option value="filter">Filter</option>
+          <option value="escalation">Escalation</option>
+          <option value="generic">Generic log</option>
+        </select>
+      </label>
+      <label class="field-label">Pasted log filename<input name="pasted_log_name" value="pasted.log"></label>
+      <label class="field-label wide-field paste-field">Paste log text directly<textarea name="pasted_log_text" placeholder="Paste Active Link, filter, escalation or other log text here..."></textarea></label>
+      <button class="primary">Add logs</button>
+    </form>
+  </section>
+
+  <div class="result-tabs">
+    <a class="tab-link {% if active_tab == 'logs' %}active{% endif %}" href="/results/{{ result.transaction_id }}?tab=logs">Log view</a>
+    <a class="tab-link {% if active_tab == 'visual' %}active{% endif %}" href="/results/{{ result.transaction_id }}?tab=visual">Visual flow</a>
+    <a class="tab-link {% if active_tab == 'downloads' %}active{% endif %}" href="/results/{{ result.transaction_id }}?tab=downloads">Downloads</a>
+  </div>
+
+  {% if active_tab in ['logs', 'visual'] %}
+  <form method="get" action="/results/{{ result.transaction_id }}" class="analysis-filterbar compact-filterbar">
+    <input type="hidden" name="tab" value="{{ active_tab }}">
+    <input type="hidden" name="cols" id="visibleColumnsInput" value="{{ selected_columns|join(',') }}">
+    <input type="hidden" name="wf_types" id="workflowTypesInput" value="{{ filters.wf_types }}">
+    <label class="field-label wide-field">Search
+      <input type="search" name="q" value="{{ filters.q }}" placeholder="Search in log lines...">
+    </label>
+    <label class="field-label">User
+      <input name="user" value="{{ filters.user }}" list="usersList" placeholder="any">
+    </label>
+    <label class="field-label">Form
+      <input name="form" value="{{ filters.form }}" list="formsList" placeholder="any">
+    </label>
+    <label class="field-label">From
+      <input type="datetime-local" name="start" value="{{ filters.start }}">
+    </label>
+    <label class="field-label">To
+      <input type="datetime-local" name="end" value="{{ filters.end }}">
+    </label>
+    <details class="filter-more analysis-more">
+      <summary>More filters / columns</summary>
+      <div class="advanced-filter-grid analysis-advanced-grid">
+        <label class="field-label">File
+          <select name="file">
+            <option value="">All files</option>
+            {% for item, count in facets.files %}<option value="{{ item }}" {% if filters.file == item %}selected{% endif %}>{{ item }} ({{ count }})</option>{% endfor %}
+          </select>
+        </label>
+        <label class="field-label">Level
+          <select name="level">
+            <option value="">All levels</option>
+            {% for item, count in facets.levels %}<option value="{{ item }}" {% if filters.level == item %}selected{% endif %}>{{ item }} ({{ count }})</option>{% endfor %}
+          </select>
+        </label>
+        <label class="inline-check field-label ignore-failed-toggle" title="Hide workflow objects/actions that failed their qualification and did not actually run.">
+          <span>Workflow</span>
+          <span class="check-row"><input type="checkbox" name="ignore_failed" value="1" {% if filters.ignore_failed %}checked{% endif %}> Ignore failed qualifications</span>
+        </label>
+        <label class="field-label">Limit
+          <select name="limit">
+            {% for n in [200,500,1000,2000,5000] %}<option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>{% endfor %}
+          </select>
+        </label>
+        <fieldset class="column-picker">
+          <legend>Visible columns</legend>
+          {% set labels = {'time':'Time','level':'Level','user':'User','form':'Form','event':'Event','pod_file':'Pod/File','transaction':'Transaction','workflow':'Workflow','field':'Field','message':'Message'} %}
+          {% for col in allowed_columns %}
+            <label><input type="checkbox" value="{{ col }}" data-column-toggle {% if col in selected_columns %}checked{% endif %}> {{ labels[col] }}</label>
+          {% endfor %}
+        </fieldset>
+      </div>
+    </details>
+    <button class="primary">Apply</button>
+    <a class="buttonlike secondary" href="/results/{{ result.transaction_id }}?tab={{ active_tab }}">Reset</a>
+  </form>
+  <datalist id="usersList">{% for item, count in facets.users %}<option value="{{ item }}">{{ count }}</option>{% endfor %}</datalist>
+  <datalist id="formsList">{% for item, count in facets.forms %}<option value="{{ item }}">{{ count }}</option>{% endfor %}</datalist>
+  {% endif %}
+
+  {% if active_tab == 'logs' %}
+  <section class="group-panel log-analysis-panel">
+    <div class="table-scroll-shell">
+      <table class="data-table analysis-table compact-log-table dynamic-columns">
+        <thead>
+          <tr>
+            {% if 'time' in selected_columns %}<th class="col-time">Time</th>{% endif %}
+            {% if 'level' in selected_columns %}<th class="col-level">Level</th>{% endif %}
+            {% if 'user' in selected_columns %}<th class="col-user">User</th>{% endif %}
+            {% if 'form' in selected_columns %}<th class="col-form">Form</th>{% endif %}
+            {% if 'event' in selected_columns %}<th class="col-event">Event</th>{% endif %}
+            {% if 'pod_file' in selected_columns %}<th class="col-podfile">Pod / File</th>{% endif %}
+            {% if 'transaction' in selected_columns %}<th class="col-tx">Transaction</th>{% endif %}
+            {% if 'workflow' in selected_columns %}<th class="col-workflow">Workflow</th>{% endif %}
+            {% if 'field' in selected_columns %}<th class="col-field">Field</th>{% endif %}
+            {% if 'message' in selected_columns %}<th class="col-message">Message</th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in rows %}
+          <tr>
+            {% if 'time' in selected_columns %}<td class="no-wrap mono col-time" title="line {{ row.line_number }}">{{ row.display_ts or '-' }}</td>{% endif %}
+            {% if 'level' in selected_columns %}<td class="col-level">{{ row.level or '-' }}</td>{% endif %}
+            {% if 'user' in selected_columns %}<td class="col-user">{{ row.user or '-' }}</td>{% endif %}
+            {% if 'form' in selected_columns %}<td class="small-cell col-form">{{ row.form or '-' }}</td>{% endif %}
+            {% if 'event' in selected_columns %}<td class="col-event">{{ row.event_type or row.operation or 'Log' }}</td>{% endif %}
+            {% if 'pod_file' in selected_columns %}<td class="small-cell col-podfile" title="{{ row.pod }} / {{ row.filename }}">{{ row.pod }} / {{ row.filename }}</td>{% endif %}
+            {% if 'transaction' in selected_columns %}<td class="small-cell col-tx"><code>{{ row.transaction or row.tid or row.rpc_id or '-' }}</code></td>{% endif %}
+            {% if 'workflow' in selected_columns %}<td class="small-cell col-workflow">{{ row.workflow or '-' }}</td>{% endif %}
+            {% if 'field' in selected_columns %}<td class="small-cell col-field">{{ row.field_name or '-' }}</td>{% endif %}
+            {% if 'message' in selected_columns %}<td class="message-cell col-message" title="{{ row.message }}">{{ row.message }}</td>{% endif %}
+          </tr>
+        {% else %}
+          <tr><td colspan="{{ selected_columns|length }}" class="empty">No parsed rows matched the current filters.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if active_tab == 'visual' %}
+  <section class="visual-shell visual-mermaid-shell">
+    <div class="flow-canvas mermaid-canvas">
+      <div class="flow-head">
+        <h2>Workflow sequence</h2>
+        <p class="muted">Each lane represents an AR object or target. Self-messages show set/change/refresh actions; arrows show calls, guide transitions, service/backchannel requests and returns.</p>
+      </div>
+      <div class="mermaid-toolbar visual-toolbar">
+        <div class="row visual-actions">
+          <button type="button" class="secondary" data-mermaid-zoom="out">− Zoom out</button>
+          <button type="button" class="secondary" data-mermaid-zoom="reset">100%</button>
+          <button type="button" class="secondary" data-mermaid-zoom="in">+ Zoom in</button>
+          <button type="button" class="secondary" data-copy-mermaid>Copy Mermaid</button>
+          <button type="button" class="secondary" data-download-mermaid>Download SVG</button>
+        </div>
+        <span class="muted">Use zoom and scroll to inspect large workflow traces.</span>
+      </div>
+      <div class="workflow-legend" aria-label="Workflow type filters">
+        {% for wf_type in workflow_type_order %}
+          <button type="button" class="workflow-type-chip {% if wf_type in selected_workflow_types %}active{% else %}inactive{% endif %}" data-workflow-type="{{ wf_type }}" title="Toggle {{ workflow_type_labels[wf_type] }} in the visual flow">
+            <i class="legend-dot legend-{{ wf_type|replace('_link','') }}"></i> {{ workflow_type_labels[wf_type] }}
+          </button>
+        {% endfor %}
+      </div>
+      <div class="mermaid-scroll dark-mermaid-scroll">
+        <pre class="mermaid" id="mermaidDiagram">{{ mermaid_code }}</pre>
+      </div>
+      <details class="slim-details mermaid-source">
+        <summary>Mermaid source</summary>
+        <pre id="mermaidSource">{{ mermaid_code }}</pre>
+      </details>
+      <details class="slim-details event-fallback">
+        <summary>Workflow actions used for the diagram</summary>
+        <div class="flow-list compact-flow-list">
+        {% for event in flow %}
+          <article class="flow-event flow-{{ event.type|lower|replace(' ', '-') }}">
+            <div class="flow-card">
+              <div class="flow-card-head"><span class="flow-type">{{ event.type }}</span><code>{{ event.time or '-' }}</code></div>
+              <h3>{{ event.workflow or event.form or event.file }}</h3>
+              <p>{{ event.message }}</p>
+              <div class="flow-meta">
+                {% if event.user %}<span>User: {{ event.user }}</span>{% endif %}
+                {% if event.form %}<span>Form: {{ event.form }}</span>{% endif %}
+                {% if event.field_name %}<span>Field: {{ event.field_name }}</span>{% endif %}
+                {% if event.transaction %}<span>Tx: {{ event.transaction }}</span>{% endif %}
+                <span>{{ event.pod }} / {{ event.file }}:{{ event.line }}</span>
+              </div>
+            </div>
+          </article>
+        {% else %}
+          <div class="empty flow-empty">No visual events matched the current filters.</div>
+        {% endfor %}
+        </div>
+      </details>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if active_tab == 'downloads' %}
   <section class="group-panel downloads-only-panel">
     <div class="section-header-row">
       <div>
         <h2>Downloaded log files</h2>
         <p class="muted">Open individual attachment downloads or use Download all logs to receive one flattened zip with the actual log files inside.</p>
       </div>
-      <a href="/results/{{ result.transaction_id }}/download-all" class="buttonlike primary">Download all logs</a>
+      <a href="/results/{{ result.transaction_id }}/download-all" class="buttonlike primary"><span class="btn-icon">↓</span> Download all logs</a>
     </div>
     <table class="data-table downloads-table">
-      <thead>
-        <tr><th>File</th><th>Size</th><th>Action</th></tr>
-      </thead>
+      <thead><tr><th>File</th><th>Size</th><th>Action</th></tr></thead>
       <tbody>
       {% for name, path in downloads.items() %}
-        <tr>
-          <td><code>{{ name }}</code></td>
-          <td>{{ result.downloads[loop.index0].bytes if result.downloads and result.downloads|length >= loop.index else "" }} bytes</td>
-          <td><a class="table-action" href="/results/{{ result.transaction_id }}/download/{{ name }}">Download</a></td>
-        </tr>
+        <tr><td><code>{{ name }}</code></td><td>{{ result.downloads[loop.index0].bytes if result.downloads and result.downloads|length >= loop.index else "" }} bytes</td><td><a class="table-action" href="/results/{{ result.transaction_id }}/download/{{ name }}">Download</a></td></tr>
       {% else %}
         <tr><td colspan="3" class="empty">No downloadable files were saved for this collection.</td></tr>
       {% endfor %}
       </tbody>
     </table>
   </section>
+  {% endif %}
 
   {% if result.requests %}
   <details class="slim-details request-details">
@@ -63,12 +253,7 @@
       {% for item in result.requests %}
         {% set pod = item.pod.id if item.pod is mapping else item.pod %}
         {% set log_type = item.log_type if item.log_type is mapping else {} %}
-        <tr>
-          <td>{{ pod or item.pod or '-' }}</td>
-          <td>{{ log_type.filename or item.filename or item.original_upload or '-' }}</td>
-          <td><code>{{ log_type.directory or item.directory or '-' }}</code></td>
-          <td><code>{{ item.entry_id or item.stored_as or '-' }}</code></td>
-        </tr>
+        <tr><td>{{ pod or item.pod or '-' }}</td><td>{{ log_type.filename or item.filename or item.original_upload or '-' }}</td><td><code>{{ log_type.directory or item.directory or '-' }}</code></td><td><code>{{ item.entry_id or item.stored_as or '-' }}</code></td></tr>
       {% endfor %}
       </tbody>
     </table>

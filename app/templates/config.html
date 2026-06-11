@@ -1,32 +1,70 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Runtime configuration</h1>
-<p>Changes here live only in this running container session. Persistent defaults are loaded from the ConfigMap-mounted YAML file.</p>
-<div class="grid2">
+<section class="main-pane full">
+  <div class="pane-titlebar compact-title">
+    <div>
+      <h1>Discovery</h1>
+      <p>Pods and log files are discovered from AR REST instead of being manually configured.</p>
+    </div>
+    <form method="post" action="/config/refresh"><button class="primary">Refresh now</button></form>
+  </div>
+
+  <div class="stats-row">
+    <div class="stat"><strong>{{ discovery_status.pod_count }}</strong><span>Pods</span></div>
+    <div class="stat"><strong>{{ discovery_status.log_count }}</strong><span>Log files</span></div>
+    <div class="stat"><strong>{{ discovery.refresh_interval_seconds }}s</strong><span>Refresh interval</span></div>
+  </div>
+
+  {% if discovery_status.last_error %}
+  <div class="warning-panel">Last discovery warning: {{ discovery_status.last_error }}</div>
+  {% endif %}
+
+  <div class="grid-two">
+    <section class="panel">
+      <h2>Discovered pods</h2>
+      <table class="data-table compact-table">
+        <thead><tr><th>Pod</th><th>Tags</th></tr></thead>
+        <tbody>
+        {% for pod in pods %}
+          <tr><td><code>{{ pod.id }}</code></td><td>{{ pod.tags|join(', ') }}</td></tr>
+        {% else %}
+          <tr><td colspan="2">No pods discovered.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    <section class="panel">
+      <h2>Discovered log files</h2>
+      <table class="data-table compact-table">
+        <thead><tr><th>File</th><th>Category</th><th>Tags</th><th>Available on</th></tr></thead>
+        <tbody>
+        {% for log in log_types %}
+          <tr>
+            <td><code>{{ log.filename }}</code><br><small>{{ log.description }}</small></td>
+            <td>{{ log.category }}</td>
+            <td>{{ log.tags|join(', ') }}</td>
+            <td>{{ log.available_on_pods|length }} pod(s)</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4">No log files discovered.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  </div>
+
   <section class="panel">
-    <h2>Pods</h2>
-    <table><tr><th>ID</th><th>Label</th><th>Tags</th></tr>{% for pod in pods %}<tr><td><code>{{ pod.id }}</code></td><td>{{ pod.label }}</td><td>{{ pod.tags|join(', ') }}</td></tr>{% endfor %}</table>
-    <form method="post" action="/config/pods" class="stack">
-      <h3>Add / replace pod</h3>
-      <input name="pod_id" placeholder="arserver.sandbox" required>
-      <input name="label" placeholder="AR Server sandbox" required>
-      <input name="tags" placeholder="arserver,sandbox">
-      <button>Add pod</button>
-    </form>
+    <h2>Discovery settings</h2>
+    <table class="data-table compact-table">
+      <tbody>
+        <tr><th>Pod source form</th><td><code>{{ discovery.pod_form_name }}</code></td></tr>
+        <tr><th>Pod query</th><td><code>{{ discovery.pod_query }}</code></td></tr>
+        <tr><th>Pod value field</th><td><code>{{ discovery.pod_value_field }}</code></td></tr>
+        <tr><th>Log source form</th><td><code>{{ discovery.log_form_name }}</code></td></tr>
+        <tr><th>Log filename field</th><td><code>{{ discovery.log_filename_field }}</code></td></tr>
+        <tr><th>Default directory sent to HLX:Logs</th><td><code>{{ discovery.default_directory }}</code></td></tr>
+      </tbody>
+    </table>
   </section>
-  <section class="panel">
-    <h2>Log types</h2>
-    <table><tr><th>ID</th><th>File</th><th>Directory</th><th>Tags</th><th>Pods</th></tr>{% for log in log_types %}<tr><td><code>{{ log.id }}</code></td><td>{{ log.filename }}</td><td><code>{{ log.directory }}</code></td><td>{{ log.available_on_tags|join(', ') }}</td><td>{{ log.available_on_pods|join(', ') }}</td></tr>{% endfor %}</table>
-    <form method="post" action="/config/log-types" class="stack">
-      <h3>Add / replace log type</h3>
-      <input name="log_id" placeholder="arerror" required>
-      <input name="label" placeholder="AR error log" required>
-      <input name="filename" placeholder="arerror.log" required>
-      <input name="directory" placeholder="/opt/bmc/ARSystem/db" required>
-      <input name="available_on_tags" placeholder="arserver,fts">
-      <input name="available_on_pods" placeholder="optional exact pod ids, comma separated">
-      <button>Add log type</button>
-    </form>
-  </section>
-</div>
+</section>
 {% endblock %}

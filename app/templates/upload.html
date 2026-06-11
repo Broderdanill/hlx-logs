@@ -4,12 +4,12 @@
   <div class="pane-titlebar">
     <div>
       <h1>Upload collection</h1>
-      <p>Upload your own log files or zip archives. Files are stored as a downloadable collection; log-content viewing will be redesigned later.</p>
+      <p>Upload log files, zip archives, or paste log text directly. The collection becomes searchable and downloadable like fetched logs.</p>
     </div>
-    <a href="/collections" class="buttonlike secondary">Collections</a>
+    <a href="/collections" class="buttonlike secondary">📁 Collections</a>
   </div>
 
-  <form method="post" action="/upload" enctype="multipart/form-data" class="upload-panel">
+  <form method="post" action="/upload" enctype="multipart/form-data" class="upload-panel paste-capable-form">
     <div class="form-grid compact-form">
       <label>
         <span>Collection name</span>
@@ -22,18 +22,40 @@
     </div>
 
     <label class="drop-zone">
-      <input type="file" name="files" multiple required accept=".log,.txt,.out,.zip,.gz">
+      <input type="file" name="files" multiple accept=".log,.txt,.out,.zip,.gz">
       <span class="drop-title">Drop log files or zip archives here</span>
       <span class="drop-subtitle">Multiple files are supported. Zip archives may contain log files directly or nested zip attachments.</span>
     </label>
 
+    <div class="form-grid compact-form">
+      <label>
+        <span>Pasted log filename</span>
+        <input name="pasted_log_name" value="pasted.log" placeholder="arfilter.log or active-link.log">
+      </label>
+      <label>
+        <span>Log type if filename is unknown</span>
+        <select name="pasted_log_type">
+          <option value="auto">Auto-detect</option>
+          <option value="active-link">Active Link</option>
+          <option value="progressive-active-link">Progressive Active Link</option>
+          <option value="filter">Filter</option>
+          <option value="escalation">Escalation</option>
+          <option value="generic">Generic log</option>
+        </select>
+      </label>
+    </div>
+    <label class="paste-field standalone-paste">
+      <span>Paste log text directly</span>
+      <textarea name="pasted_log_text" placeholder="Paste Active Link, filter, escalation or other log text here..."></textarea>
+    </label>
+
     <div class="help-card compact-help">
       <strong>Filename recognition</strong>
-      <p>Files such as <code>arerror.log</code>, <code>ardebug.log</code>, <code>arexception.log</code>, <code>armonitor.log</code>, <code>arjavaplugin.log</code> and other configured AR log names are automatically tagged with their log type. Unknown filenames are still loaded as generic logs.</p>
+      <p>Known AR log names are recognized automatically. If you paste text with a generic filename, choose the closest log type to help the analyzer classify it.</p>
     </div>
 
     <div class="form-actions">
-      <button class="primary">Create collection from upload</button>
+      <button class="primary">Create collection from upload / paste</button>
     </div>
   </form>
 </section>

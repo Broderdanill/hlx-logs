@@ -1,74 +1,71 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="shell">
-  <aside class="left-rail">
-    <h3>Collections</h3>
-    <p>Temporary in-pod storage. Retention {{ storage.retention_days }} days.</p>
-    <div class="rail-list">
-      {% for item in recent %}
-      <div class="rail-row">
-        <a href="/results/{{ item.transaction_id }}">
-          <strong>{{ item.created_at[:19].replace('T',' ') }}</strong>
-          <span>{{ item.downloads|length }} file(s){% if item.failed_count %} · {{ item.failed_count }} warning(s){% endif %}</span>
-        </a>
-        <form method="post" action="/collections/{{ item.transaction_id }}/delete" onsubmit="return confirm('Delete this collection?');">
-          <button class="icon-button" title="Delete">×</button>
-        </form>
-      </div>
-      {% else %}
-      <div class="empty">No collections yet.</div>
-      {% endfor %}
-    </div>
-  </aside>
-
-  <section class="main-pane">
-    <div class="pane-titlebar">
-      <div>
-        <h1>Collect logs</h1>
-        <p>Signed in as <strong>{{ username }}</strong>. Requests go to <code>{{ ar.form_name }}</code> at <code>{{ ar.base_url }}</code>.</p>
-      </div>
-      <div class="header-actions"><a href="/upload" class="buttonlike secondary">Upload collection</a><button form="collectForm" class="primary">Fetch selected logs</button></div>
+<section class="main-pane full-pane collect-pane">
+  <div class="pane-titlebar">
+    <div>
+      <h1>Collect logs</h1>
+      <p>Signed in as <strong>{{ username }}</strong>. Requests go to <code>{{ ar.form_name }}</code> at <code>{{ ar.base_url }}</code>.</p>
+      <p class="muted">
+        Available pods and logs are discovered from AR REST.
+        {% if discovery_status.last_success_at %}Last refresh {{ discovery_status.last_success_at[:19].replace('T',' ') }}.{% endif %}
+        {% if discovery_status.last_error %}<span class="warning-text">Discovery warning: {{ discovery_status.last_error }}</span>{% endif %}
+      </p>
     </div>
 
-    <form id="collectForm" method="post" action="/collect" class="selector-shell">
-      <div class="toolbar">
-        <input type="search" id="selectorSearch" placeholder="Name, filename, pod...">
-        <button type="button" class="secondary" data-preset="core">Core AR</button>
-        <button type="button" class="secondary" data-preset="performance">Performance</button>
-        <button type="button" class="secondary" data-preset="plugin">Plugin</button>
-        <button type="button" class="secondary" data-preset="all">All</button>
-        <button type="button" class="secondary" data-preset="none">Clear</button>
-      </div>
-      <div class="split-selectors compact">
-        <section>
-          <h2>Pods</h2>
-          <div class="dense-list" data-filter-area>
-          {% for pod in pods if pod.enabled %}
-            <label class="dense-row" data-search="{{ pod.id }} {{ pod.label }} {{ pod.tags|join(' ') }}">
-              <input type="checkbox" name="pod_ids" value="{{ pod.id }}" {% if loop.first %}checked{% endif %}>
-              <span class="row-main">{{ pod.label }}</span>
-              <code>{{ pod.id }}</code>
-              <small>{{ pod.tags|join(' · ') }}</small>
-            </label>
-          {% endfor %}
-          </div>
-        </section>
-        <section>
-          <h2>Log types</h2>
-          <div class="dense-table" data-filter-area>
-          {% for log in log_types if log.enabled %}
-            <label class="log-row" data-preset-tags="{{ log.parser }} {{ log.category|lower }} {{ log.id }}" data-search="{{ log.id }} {{ log.label }} {{ log.filename }} {{ log.directory }} {{ log.category }} {{ log.description }}">
-              <input type="checkbox" name="log_type_ids" value="{{ log.id }}" {% if loop.index <= 4 %}checked{% endif %}>
-              <span class="row-main">{{ log.label }}</span>
-              <code>{{ log.filename }}</code>
-              <span class="category">{{ log.category }}</span>
-              <small>{{ log.description }}</small>
-            </label>
-          {% endfor %}
-          </div>
-        </section>
-      </div>
-    </form>
-  </section>
+  </div>
+
+  <form id="collectForm" method="post" action="/collect" class="selector-shell">
+    <div class="collect-toolbar compact-collect-toolbar">
+      <input type="search" id="selectorSearch" class="collect-search" placeholder="Filter pods and logs...">
+      <label class="template-select-label">Template
+        <select id="presetSelect" data-preset-select>
+          <option value="custom" selected>Custom selection</option>
+          <option value="critical">Critical</option>
+          <option value="trace">Trace</option>
+          <option value="sql">SQL</option>
+          <option value="filter">Filter</option>
+          <option value="plugin">Plugin</option>
+          <option value="web">Web/REST</option>
+          <option value="deployment">Deployment</option>
+          <option value="all">All logs</option>
+          <option value="none">Clear selection</option>
+        </select>
+      </label>
+      <button form="collectForm" class="primary fetch-button"><span class="btn-icon">↯</span> Fetch selected logs</button>
+    </div>
+    <div class="split-selectors compact">
+      <section>
+        <h2>Pods <span class="pill">{{ pods|length }}</span></h2>
+        <div class="dense-list" data-filter-area>
+        {% for pod in pods if pod.enabled %}
+          <label class="dense-row" data-search="{{ pod.id }} {{ pod.label }} {{ pod.tags|join(' ') }}">
+            <input type="checkbox" name="pod_ids" value="{{ pod.id }}" {% if loop.first %}checked{% endif %}>
+            <span class="row-main">{{ pod.label }}</span>
+            <code>{{ pod.id }}</code>
+            <small>{{ pod.tags|join(' · ') }}</small>
+          </label>
+        {% else %}
+          <div class="empty">No pods discovered yet. Open Discovery and refresh.</div>
+        {% endfor %}
+        </div>
+      </section>
+      <section>
+        <h2>Available log files <span class="pill">{{ log_types|length }}</span></h2>
+        <div class="dense-table" data-filter-area>
+        {% for log in log_types if log.enabled %}
+          <label class="log-row" data-preset-tags="{{ log.category|lower }} {{ log.parser }} {{ log.severity }} {{ log.tags|join(' ') }} {{ log.id }}" data-search="{{ log.id }} {{ log.label }} {{ log.filename }} {{ log.directory }} {{ log.category }} {{ log.tags|join(' ') }} {{ log.description }}">
+            <input type="checkbox" name="log_type_ids" value="{{ log.id }}" >
+            <span class="row-main">{{ log.label }}</span>
+            <code>{{ log.filename }}</code>
+            <span class="category">{{ log.category }}</span>
+            <small>{{ log.available_on_pods|length }} pod(s) · {{ log.tags|join(', ') if log.tags else log.directory }}</small>
+          </label>
+        {% else %}
+          <div class="empty">No log files discovered yet. Open Discovery and refresh.</div>
+        {% endfor %}
+        </div>
+      </section>
+    </div>
+  </form>
 </section>
 {% endblock %}

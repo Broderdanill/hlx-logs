@@ -21,6 +21,21 @@ class ArSettings:
 
 
 @dataclass
+class DiscoverySettings:
+    enabled: bool = True
+    refresh_interval_seconds: int = 300
+    pod_form_name: str = "AR System Configuration Component Setting"
+    pod_query: str = "'Setting Name' = \"Configuration-Name\""
+    pod_value_field: str = "Setting Value"
+    log_form_name: str = "AR System Server Group Logs"
+    log_server_field: str = "Server Name"
+    log_filename_field: str = "fileName"
+    log_size_field: str = "File Size"
+    default_directory: str = "/opt/bmc/ARSystem/db"
+    include_zero_byte_logs: bool = True
+
+
+@dataclass
 class SecuritySettings:
     require_admin_group: bool = True
     user_form: str = "User"
@@ -53,9 +68,11 @@ class LogTypeConfig:
     available_on_pods: list[str] = field(default_factory=list)
     enabled: bool = True
     parser: str = "generic"
-    category: str = "General"
+    category: str = "Discovered"
     description: str = ""
     severity: str = "info"
+    tags: list[str] = field(default_factory=list)
+    file_sizes_by_pod: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -65,6 +82,7 @@ class AppConfig:
     log_types: list[LogTypeConfig]
     storage: StorageSettings = field(default_factory=StorageSettings)
     security: SecuritySettings = field(default_factory=SecuritySettings)
+    discovery: DiscoverySettings = field(default_factory=DiscoverySettings)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -72,6 +90,13 @@ def _env_bool(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return int(default)
+    return int(value)
 
 
 def load_config(path: str | Path) -> AppConfig:
@@ -86,16 +111,16 @@ def load_config(path: str | Path) -> AppConfig:
         form_name=os.getenv("AR_FORM_NAME", ar_data.get("form_name", "HLX:Logs")),
         attachment_field=os.getenv("AR_ATTACHMENT_FIELD", ar_data.get("attachment_field", "1EX")),
         verify_tls=_env_bool("AR_VERIFY_TLS", bool(ar_data.get("verify_tls", False))),
-        request_timeout_seconds=int(os.getenv("AR_REQUEST_TIMEOUT_SECONDS", ar_data.get("request_timeout_seconds", 60))),
-        poll_interval_seconds=int(os.getenv("AR_POLL_INTERVAL_SECONDS", ar_data.get("poll_interval_seconds", 2))),
-        poll_timeout_seconds=int(os.getenv("AR_POLL_TIMEOUT_SECONDS", ar_data.get("poll_timeout_seconds", 60))),
+        request_timeout_seconds=_env_int("AR_REQUEST_TIMEOUT_SECONDS", ar_data.get("request_timeout_seconds", 60)),
+        poll_interval_seconds=_env_int("AR_POLL_INTERVAL_SECONDS", ar_data.get("poll_interval_seconds", 2)),
+        poll_timeout_seconds=_env_int("AR_POLL_TIMEOUT_SECONDS", ar_data.get("poll_timeout_seconds", 60)),
         result_query_template=os.getenv("AR_RESULT_QUERY_TEMPLATE", ar_data.get("result_query_template", "'TransactionId' = \"{transaction_id}\"")),
     )
 
     storage_data = data.get("storage", {})
     storage = StorageSettings(
         data_dir=os.getenv("DATA_DIR", storage_data.get("data_dir", "/data")),
-        retention_days=int(os.getenv("RETENTION_DAYS", storage_data.get("retention_days", 5))),
+        retention_days=_env_int("RETENTION_DAYS", storage_data.get("retention_days", 5)),
     )
 
     security_data = data.get("security", {})
@@ -107,6 +132,21 @@ def load_config(path: str | Path) -> AppConfig:
         admin_group_id=os.getenv("AR_ADMIN_GROUP_ID", str(security_data.get("admin_group_id", "1"))),
     )
 
+    discovery_data = data.get("discovery", {})
+    discovery = DiscoverySettings(
+        enabled=_env_bool("DISCOVERY_ENABLED", bool(discovery_data.get("enabled", True))),
+        refresh_interval_seconds=_env_int("DISCOVERY_REFRESH_INTERVAL_SECONDS", discovery_data.get("refresh_interval_seconds", 300)),
+        pod_form_name=os.getenv("DISCOVERY_POD_FORM_NAME", discovery_data.get("pod_form_name", "AR System Configuration Component Setting")),
+        pod_query=os.getenv("DISCOVERY_POD_QUERY", discovery_data.get("pod_query", "'Setting Name' = \"Configuration-Name\"")),
+        pod_value_field=os.getenv("DISCOVERY_POD_VALUE_FIELD", discovery_data.get("pod_value_field", "Setting Value")),
+        log_form_name=os.getenv("DISCOVERY_LOG_FORM_NAME", discovery_data.get("log_form_name", "AR System Server Group Logs")),
+        log_server_field=os.getenv("DISCOVERY_LOG_SERVER_FIELD", discovery_data.get("log_server_field", "Server Name")),
+        log_filename_field=os.getenv("DISCOVERY_LOG_FILENAME_FIELD", discovery_data.get("log_filename_field", "fileName")),
+        log_size_field=os.getenv("DISCOVERY_LOG_SIZE_FIELD", discovery_data.get("log_size_field", "File Size")),
+        default_directory=os.getenv("DISCOVERY_DEFAULT_DIRECTORY", discovery_data.get("default_directory", "/opt/bmc/ARSystem/db")),
+        include_zero_byte_logs=_env_bool("DISCOVERY_INCLUDE_ZERO_BYTE_LOGS", bool(discovery_data.get("include_zero_byte_logs", True))),
+    )
+
     pods = [PodConfig(**item) for item in data.get("pods", [])]
     log_types = [LogTypeConfig(**item) for item in data.get("log_types", [])]
-    return AppConfig(ar=ar, pods=pods, log_types=log_types, storage=storage, security=security)
+    return AppConfig(ar=ar, pods=pods, log_types=log_types, storage=storage, security=security, discovery=discovery)

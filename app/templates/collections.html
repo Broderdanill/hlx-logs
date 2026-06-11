@@ -1,19 +1,32 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="main-pane full-pane">
+<section class="main-pane full-pane collections-pane">
   <div class="pane-titlebar">
     <div>
       <h1>Collections</h1>
-      <p>Collections are user scoped and retained for {{ storage.retention_days }} days while the pod is alive.</p>
+      <p>Collections are temporary in-pod storage and retained for {{ storage.retention_days }} days while the pod is alive.</p>
     </div>
-    <a href="/" class="buttonlike primary">New collection</a>
+    <div class="header-actions">
+      <a href="/" class="buttonlike primary">➕ New collection</a>
+      <a href="/upload" class="buttonlike secondary">⬆ Upload collection</a>
+    </div>
   </div>
-  <table class="data-table">
-    <thead><tr><th>Created</th><th>Name / Source</th><th>Transaction</th><th>Files</th><th>Warnings</th><th>Actions</th></tr></thead>
+
+  <div class="collection-userbar">
+    <strong>User</strong>
+    <a class="user-pill {% if not selected_owner %}active{% endif %}" href="/collections">All users</a>
+    {% for user in owners %}
+      <a class="user-pill {% if selected_owner == user.owner %}active{% endif %}" href="/collections?owner={{ user.owner|urlencode }}">{{ user.owner }} <span>{{ user.count }}</span></a>
+    {% endfor %}
+  </div>
+
+  <table class="data-table collections-table">
+    <thead><tr><th>Created</th><th>Owner</th><th>Name / Source</th><th>Transaction</th><th>Files</th><th>Warnings</th><th>Actions</th></tr></thead>
     <tbody>
       {% for item in collections %}
       <tr>
         <td>{{ item.created_at[:19].replace('T',' ') }}</td>
+        <td><span class="owner-chip">{{ item.owner or 'unknown' }}</span></td>
         <td><strong>{{ item.collection_name or "Fetched logs" }}</strong><br><small>{{ item.source or "fetch" }}</small></td>
         <td><code>{{ item.transaction_id }}</code></td>
         <td>{{ item.downloads|length }}</td>
@@ -25,7 +38,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="empty">No collections have been saved yet.</td></tr>
+      <tr><td colspan="7" class="empty">No collections have been saved yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

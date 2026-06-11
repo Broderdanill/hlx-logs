@@ -122,6 +122,68 @@ class ArClient:
         tokens = re.findall(r"\d+", group_value)
         return str(group_id) in tokens
 
+
+    async def query_entries(self, form_name: str, *, q: str = "", fields: str = "", limit: int = 1000) -> list[dict]:
+        """Generic AR REST entry query helper."""
+        form = quote(form_name, safe="")
+        params: dict[str, str] = {"limit": str(limit)}
+        if q:
+            params["q"] = q
+        if fields:
+            params["fields"] = fields
+        try:
+            response = await self.client.get(
+                f"/api/arsys/v1/entry/{form}",
+                params=params,
+                headers=self._headers(),
+            )
+        except httpx.RequestError as exc:
+            raise _friendly_request_error(exc, self.settings.base_url) from exc
+        if response.status_code >= 400:
+            raise ArRestError(f"Query failed for form {form_name}: HTTP {response.status_code}: {response.text[:1000]}")
+        return response.json().get("entries", [])
+
+    async def discover_pods(self, *, form_name: str, query: str, value_field: str) -> list[str]:
+        fields = f"values({value_field})"
+        entries = await self.query_entries(form_name, q=query, fields=fields, limit=10000)
+        pods: list[str] = []
+        seen: set[str] = set()
+        for entry in entries:
+            value = str((entry.get("values") or {}).get(value_field, "")).strip()
+            if value and value not in seen:
+                seen.add(value)
+                pods.append(value)
+        return pods
+
+    async def discover_log_files_for_pod(
+        self,
+        pod: str,
+        *,
+        form_name: str,
+        server_field: str,
+        filename_field: str,
+        size_field: str,
+    ) -> list[dict]:
+        safe_pod = pod.replace('"', '\"')
+        q = f"'{server_field}' = \"{safe_pod}\""
+        fields = f"values({filename_field},{size_field})"
+        entries = await self.query_entries(form_name, q=q, fields=fields, limit=10000)
+        logs: list[dict] = []
+        seen: set[str] = set()
+        for entry in entries:
+            values = entry.get("values") or {}
+            filename = str(values.get(filename_field, "")).strip()
+            if not filename or filename in seen:
+                continue
+            seen.add(filename)
+            logs.append({
+                "filename": filename,
+                "file_size": str(values.get(size_field, "")).strip(),
+                "entry_id": _entry_id_from_links(entry),
+            })
+        logs.sort(key=lambda item: item["filename"].lower())
+        return logs
+
     async def create_log_request(self, pod: str, directory: str, filename: str, transaction_id: str) -> str | None:
         form = quote(self.settings.form_name, safe="")
         payload = {
