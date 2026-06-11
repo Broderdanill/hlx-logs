@@ -1,10 +1,10 @@
 # hlx-logs
 
-`hlx-logs` is a Python/FastAPI application for collecting BMC Helix / AR System log files through the `HLX:Logs` AR REST form, storing the collected zip files, parsing the log content, and viewing merged timelines in a dark UI.
+`hlx-logs` is a Python/FastAPI application for collecting BMC Helix / AR System log files through the `HLX:Logs` AR REST form and making the downloaded log packages available for individual or combined download. Log-content viewing/parsing is intentionally disabled for now and will be redesigned later.
 
 ## Current version
 
-**0.0.12**
+**0.0.14**
 
 ## Run with Podman
 
@@ -58,7 +58,7 @@ Each collection contains:
 
 ```text
 meta.json
-rows.jsonl
+rows.jsonl      # currently empty; reserved for future log-content views
 downloads/*.zip
 ```
 
@@ -66,16 +66,9 @@ Default retention is **5 days**. Old collections are cleaned when the app starts
 
 The supplied Podman/Kubernetes manifests use a temporary `emptyDir` volume for `/data`. This means collections survive container restarts inside the same pod, but are removed when the pod is deleted or recreated. No PVC or hostPath volume is created by default.
 
-## Log parsing
+## Log content display
 
-The parser currently recognizes common AR Server log patterns from the provided examples:
-
-- ISO timestamp lines used by `arerror.log`, `ardebug.log`, and `arexception.log`
-- AR monitor angle-bracket format from `armonitor.log`
-- `ARERR`, `ARWARN`, `ARNOTE` style codes
-- `TrID`, `TID`, `RPC ID`, `Queue`, `USER`, and monitor thread names
-- API duration patterns such as `API[5.199 seconds]`
-- Java exception / stack trace continuation lines
+Log content display, search, timelines and parser-driven views are intentionally disabled in this version. The app now focuses on collecting log artifacts and allowing users to download them individually or as one flattened zip. The parser files remain in the codebase as a foundation for a later redesign, but fetched collections no longer parse or render log rows.
 
 ## Administrator login validation
 
@@ -97,6 +90,21 @@ You can disable this for troubleshooting with `REQUIRE_ADMIN_GROUP=false`, but t
 Each collected transaction is tagged with the signed-in username and is only shown to that user. Collections are still stored in the temporary `/data` volume and are removed when the pod is recreated or when retention cleanup deletes them. Users can also delete their own collections immediately from the start page, collections page or result page.
 
 ## Version history
+
+### 0.0.14
+
+- Temporarily removed the log-content view, search filters, row tables, timeline modes and parser-driven UI.
+- Collection detail pages now focus only on downloadable artifacts.
+- Fetched logs are stored as attachments only; no parsing is performed during collection.
+- `Download all logs` and individual log downloads remain available.
+- Upload still creates a collection, but uploaded files are stored for download rather than parsed for viewing.
+
+### 0.0.13
+
+- Reworked the log result filter bar into a compact default set plus collapsible advanced filters.
+- Removed visible From/To time filters; focused time-window filtering now uses Around time only.
+- Re-cropped the progress icon asset so the visible medallion fills the circular progress frame better.
+- Added responsive/table refinements to reduce horizontal overflow in the result view.
 
 ### 0.0.12
 

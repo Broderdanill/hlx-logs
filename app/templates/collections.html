@@ -9,17 +9,15 @@
     <a href="/" class="buttonlike primary">New collection</a>
   </div>
   <table class="data-table">
-    <thead><tr><th>Created</th><th>Name / Source</th><th>Transaction</th><th>Rows</th><th>Files</th><th>Failed</th><th>Summary</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Created</th><th>Name / Source</th><th>Transaction</th><th>Files</th><th>Warnings</th><th>Actions</th></tr></thead>
     <tbody>
       {% for item in collections %}
       <tr>
         <td>{{ item.created_at[:19].replace('T',' ') }}</td>
         <td><strong>{{ item.collection_name or "Fetched logs" }}</strong><br><small>{{ item.source or "fetch" }}</small></td>
         <td><code>{{ item.transaction_id }}</code></td>
-        <td>{{ item.row_count }}</td>
         <td>{{ item.downloads|length }}</td>
         <td>{% if item.failed_count %}<span class="level-chip level-warn">{{ item.failed_count }}</span>{% else %}-{% endif %}</td>
-        <td>{% for level, count in item.summary.levels.items() %}<span class="level-chip level-{{ level|lower }}">{{ level }} {{ count }}</span>{% endfor %}</td>
         <td class="actions-cell">
           <a class="table-action" href="/results/{{ item.transaction_id }}">Open</a>
           <a class="table-action" href="/results/{{ item.transaction_id }}/download-all">Download all</a>
@@ -27,7 +25,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="8" class="empty">No collections have been saved yet.</td></tr>
+      <tr><td colspan="6" class="empty">No collections have been saved yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

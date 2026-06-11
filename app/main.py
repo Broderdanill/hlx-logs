@@ -20,7 +20,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .ar_client import ArClient, ArRestError, _entry_id_from_links
 from .logging_config import configure_logging
-from .parser import extract_zip_files, parse_log_text, LogLine
+from .parser import LogLine
 from .runtime_config import RuntimeConfig
 from .settings import load_config, PodConfig, LogTypeConfig
 from .storage import CollectionStore
@@ -34,7 +34,7 @@ runtime_config = RuntimeConfig(config)
 store = CollectionStore(config.storage)
 store.cleanup()
 
-APP_VERSION = "0.0.12"
+APP_VERSION = "0.0.14"
 
 app = FastAPI(title="hlx-logs", version=APP_VERSION)
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-only-change-me"), same_site="lax")
@@ -234,7 +234,6 @@ async def _collect_job(transaction_id: str, username: str, jwt: str, pair_dicts:
     store.cleanup()
     client = ArClient(cfg.ar, jwt)
     raw_downloads: dict[str, bytes] = {}
-    parsed: list[LogLine] = []
     request_meta: list[dict] = []
     failures: list[dict] = []
     step = 0
@@ -264,7 +263,6 @@ async def _collect_job(transaction_id: str, username: str, jwt: str, pair_dicts:
                 request_meta.append({"pod": pod_data, "log_type": log_data, "entry_id": entry_id})
             except Exception as exc:
                 add_failure("request", pod_id, filename, exc, directory)
-                # Treat this item as consumed for request/read/download progress.
                 step += 3
                 _job_update(transaction_id, message=f"Skipped {filename} from {pod_id}: {exc}", step=min(step, total))
                 continue
@@ -291,24 +289,9 @@ async def _collect_job(transaction_id: str, username: str, jwt: str, pair_dicts:
                 entries.append(entry)
             except Exception as exc:
                 add_failure("read", pod_id, filename, exc, directory, entry_id)
-                # Still keep a minimal entry; direct attachment retrieval may work after the filter completes.
                 entries.append({"values": {"Pod": pod_id, "Filename": filename, "Directory": directory}, "_hlx_entry_id": entry_id, "_hlx_request_meta": meta})
             step += 1
             _job_update(transaction_id, step=min(step, total))
-
-        if len(entries) < len(request_meta):
-            deadline = asyncio.get_event_loop().time() + cfg.ar.poll_timeout_seconds
-            while asyncio.get_event_loop().time() < deadline:
-                try:
-                    queried = await client.query_entries_by_transaction(transaction_id)
-                except Exception as exc:
-                    add_failure("query", "*", "*", exc)
-                    queried = []
-                if len(queried) >= len(request_meta):
-                    entries = queried
-                    break
-                _job_update(transaction_id, message=f"Waiting for generated attachments ({len(queried)}/{len(request_meta)})", step=min(step, total))
-                await asyncio.sleep(cfg.ar.poll_interval_seconds)
 
         for entry in entries:
             values = entry.get("values", {})
@@ -344,21 +327,14 @@ async def _collect_job(transaction_id: str, username: str, jwt: str, pair_dicts:
 
             key = f"{pod}__{filename}__{entry_id}.zip"
             raw_downloads[key] = blob
-            try:
-                extracted = extract_zip_files(blob)
-                if not extracted:
-                    add_failure("parse", pod, filename, "Downloaded payload contained no readable files", directory, entry_id)
-                for zip_name, text in extracted.items():
-                    parsed.extend(parse_log_text(text, pod=pod, filename=filename, source_path=f"{directory}/{filename}::{zip_name}"))
-            except Exception as exc:
-                add_failure("parse", pod, filename, exc, directory, entry_id)
             step += 1
             _job_update(transaction_id, step=min(step, total))
 
-        parsed.sort(key=lambda row: (row.sort_ts, row.pod, row.filename, row.line_number))
         if not raw_downloads and failures:
             raise ArRestError(f"No logs could be downloaded. {len(failures)} item(s) failed. First error: {failures[0]['error']}")
-        store.save_collection(transaction_id, username, request_meta, parsed, raw_downloads, failures=failures)
+        # Log content rendering/parsing is intentionally disabled for now.
+        # Collections store only the downloadable artifacts and request metadata.
+        store.save_collection(transaction_id, username, request_meta, [], raw_downloads, failures=failures)
         if failures:
             _job_update(
                 transaction_id,
@@ -374,7 +350,6 @@ async def _collect_job(transaction_id: str, username: str, jwt: str, pair_dicts:
         _job_update(transaction_id, status="error", message="Collection failed", error=str(exc))
     finally:
         await client.close()
-
 
 
 
@@ -449,14 +424,13 @@ async def upload_collection(
     require_jwt(request)
     username = request.session.get("username", "unknown")
     transaction_id = uuid.uuid4().hex
-    rows: list[LogLine] = []
     downloads: dict[str, bytes] = {}
     requests: list[dict] = []
     failures: list[dict] = []
     seen_names: dict[str, int] = {}
 
     def unique_name(name: str) -> str:
-        safe = name.replace("/", "__").replace("\\\\", "__").strip() or "uploaded.log"
+        safe = name.replace("/", "__").replace("\\", "__").strip() or "uploaded.log"
         count = seen_names.get(safe, 0) + 1
         seen_names[safe] = count
         if count == 1:
@@ -471,47 +445,28 @@ async def upload_collection(
             if not blob:
                 failures.append({"stage": "upload", "pod": default_pod, "filename": original_name, "error": "Uploaded file was empty"})
                 continue
-            for inner_name, inner_blob in _iter_uploaded_log_files(original_name, blob):
-                leaf = Path(inner_name).name or original_name
-                filename = _known_log_filename(inner_name or original_name)
-                pod = _guess_uploaded_pod(original_name, default_pod)
-                # Try to decode as text; binary files are skipped but reported.
-                try:
-                    text = inner_blob.decode("utf-8", errors="replace")
-                except Exception as exc:
-                    failures.append({"stage": "parse", "pod": pod, "filename": leaf, "error": f"Could not decode uploaded file: {exc}"})
-                    continue
-                if "\x00" in text[:4096]:
-                    failures.append({"stage": "parse", "pod": pod, "filename": leaf, "error": "Skipped likely binary file"})
-                    continue
-                archive_name = unique_name(f"{pod}__{filename}")
-                downloads[archive_name] = inner_blob
-                parsed = parse_log_text(text, pod=pod, filename=filename, source_path=f"upload::{original_name}::{inner_name}")
-                rows.extend(parsed)
-                requests.append({
-                    "source": "upload",
-                    "original_upload": original_name,
-                    "filename": filename,
-                    "stored_as": archive_name,
-                    "pod": pod,
-                    "row_count": len(parsed),
-                })
+            name = unique_name(original_name)
+            downloads[name] = blob
+            requests.append({
+                "source": "upload",
+                "original_upload": original_name,
+                "stored_as": name,
+                "pod": default_pod or "uploaded",
+                "bytes": len(blob),
+            })
         except Exception as exc:
             logger.warning("Upload processing failed for %s: %s", original_name, exc, exc_info=True)
             failures.append({"stage": "upload", "pod": default_pod, "filename": original_name, "error": str(exc)})
 
-    if not rows and not downloads:
-        return templates.TemplateResponse("error.html", {**base_context(request), "message": "No readable log files were found in the upload."}, status_code=400)
-    rows.sort(key=lambda row: (row.sort_ts, row.pod, row.filename, row.line_number))
-    # Use normal collection storage so uploaded collections behave exactly like fetched collections.
-    store.save_collection(transaction_id, username, requests, rows, downloads, failures=failures)
-    # Patch metadata with friendly name and source marker.
+    if not downloads:
+        return templates.TemplateResponse("error.html", {**base_context(request), "message": "No readable files were found in the upload."}, status_code=400)
+    store.save_collection(transaction_id, username, requests, [], downloads, failures=failures)
     meta_path = store.path_for(transaction_id) / "meta.json"
     try:
         import json
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         meta["source"] = "upload"
-        meta["collection_name"] = collection_name.strip() or "Uploaded collection"
+        meta["collection_name"] = collection_name.strip() or "Uploaded files"
         meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
         store._cache.pop(str(store.path_for(transaction_id)), None)
     except Exception:
@@ -546,159 +501,17 @@ async def job_status(request: Request, transaction_id: str):
 
 
 @app.get("/results/{transaction_id}", response_class=HTMLResponse)
-async def results(
-    request: Request,
-    transaction_id: str,
-    q: str = "",
-    level: str = "",
-    mode: str = "combined",
-    transaction: str = "",
-    file: str = "",
-    pod: str = "",
-    tag: str = "",
-    user: str = "",
-    start_time: str = "",
-    end_time: str = "",
-    around_time: str = "",
-    around_before_minutes: int = 5,
-    around_after_minutes: int = 5,
-    limit: int = 1000,
-    offset: int = 0,
-):
+async def results(request: Request, transaction_id: str):
     require_jwt(request)
     loaded = store.load_collection(transaction_id, owner=request.session.get("username"))
     if not loaded:
-        return templates.TemplateResponse("error.html", {**base_context(request), "message": "Result not found. It may have expired based on retention settings."}, status_code=404)
-    rows: list[LogLine] = loaded["rows"]
-    filtered = rows
-    if q:
-        q_lower = q.lower()
-        filtered = [r for r in filtered if q_lower in r.raw.lower() or q_lower in r.pod.lower() or q_lower in r.filename.lower() or q_lower in r.transaction.lower() or q_lower in r.user.lower()]
-    if level:
-        filtered = [r for r in filtered if r.level == level.upper()]
-    if transaction:
-        filtered = [r for r in filtered if r.transaction == transaction]
-    if file:
-        filtered = [r for r in filtered if r.filename == file]
-    if pod:
-        filtered = [r for r in filtered if r.pod == pod]
-    if tag:
-        filtered = [r for r in filtered if tag in r.tags or tag == r.operation.lower() or tag == r.component.lower()]
-    if user:
-        user_lower = user.lower()
-        filtered = [r for r in filtered if user_lower in (r.user or "").lower()]
-
-    def _parse_user_time(value: str):
-        if not value:
-            return None
-        try:
-            # datetime-local input arrives without timezone. Treat it as UTC because AR log parsing normalizes to UTC.
-            normalized = value.strip()
-            if "T" in normalized and len(normalized) == 16:
-                return datetime.fromisoformat(normalized).replace(tzinfo=timezone.utc)
-            parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-            return parsed.astimezone(timezone.utc)
-        except Exception:
-            try:
-                from dateutil import parser as dtparser
-                parsed = dtparser.parse(value)
-                if parsed.tzinfo is None:
-                    parsed = parsed.replace(tzinfo=timezone.utc)
-                return parsed.astimezone(timezone.utc)
-            except Exception:
-                return None
-
-    start_dt = _parse_user_time(start_time)
-    end_dt = _parse_user_time(end_time)
-    around_dt = _parse_user_time(around_time)
-    if around_dt:
-        before = max(0, min(int(around_before_minutes or 0), 1440))
-        after = max(0, min(int(around_after_minutes or 0), 1440))
-        start_dt = around_dt - timedelta(minutes=before)
-        end_dt = around_dt + timedelta(minutes=after)
-    if start_dt:
-        filtered = [r for r in filtered if r.sort_ts != datetime.max.replace(tzinfo=timezone.utc) and r.sort_ts >= start_dt]
-    if end_dt:
-        filtered = [r for r in filtered if r.sort_ts != datetime.max.replace(tzinfo=timezone.utc) and r.sort_ts <= end_dt]
-
-    levels = sorted({r.level for r in rows if r.level})
-    files = sorted({r.filename for r in rows})
-    pods = sorted({r.pod for r in rows})
-    tags = sorted({t for r in rows for t in r.tags})
-    users = sorted({r.user for r in rows if r.user})[:300]
-    transactions = []
-    tx_counts: dict[str, int] = {}
-    for r in rows:
-        if r.transaction:
-            tx_counts[r.transaction] = tx_counts.get(r.transaction, 0) + 1
-    transactions = sorted(tx_counts.items(), key=lambda item: item[1], reverse=True)[:100]
-
-    limit = max(100, min(limit, 2000))
-    offset = max(0, offset)
-    paged = filtered[offset:offset + limit]
-    next_offset = offset + limit if offset + limit < len(filtered) else None
-    prev_offset = max(0, offset - limit) if offset > 0 else None
-
-    def page_url(new_offset: int | None) -> str:
-        if new_offset is None:
-            return ""
-        params = {
-            "q": q, "level": level, "mode": mode, "transaction": transaction,
-            "file": file, "pod": pod, "tag": tag, "user": user,
-            "start_time": start_time, "end_time": end_time,
-            "around_time": around_time, "around_before_minutes": str(around_before_minutes),
-            "around_after_minutes": str(around_after_minutes),
-            "limit": str(limit), "offset": str(new_offset),
-        }
-        return f"/results/{transaction_id}?" + urlencode({k: v for k, v in params.items() if v not in ("", None)})
-
-    by_file: dict[str, list[LogLine]] = {}
-    if mode == "file":
-        for row in paged:
-            by_file.setdefault(row.filename, []).append(row)
-    by_transaction: dict[str, list[LogLine]] = {}
-    if mode == "transaction":
-        for row in paged:
-            key = row.transaction or "No transaction id"
-            by_transaction.setdefault(key, []).append(row)
-
+        return templates.TemplateResponse("error.html", {**base_context(request), "message": "Collection not found. It may have expired based on retention settings."}, status_code=404)
     return templates.TemplateResponse(
         "results.html",
         {
             **base_context(request),
             "result": loaded["meta"],
             "downloads": loaded["downloads"],
-            "rows": paged,
-            "total_rows": len(rows),
-            "shown_rows": len(paged),
-            "filtered_rows": len(filtered),
-            "q": q,
-            "level": level,
-            "mode": mode,
-            "selected_transaction": transaction,
-            "selected_file": file,
-            "selected_pod": pod,
-            "selected_tag": tag,
-            "selected_user": user,
-            "start_time": start_time,
-            "end_time": end_time,
-            "around_time": around_time,
-            "around_before_minutes": around_before_minutes,
-            "around_after_minutes": around_after_minutes,
-            "levels": levels,
-            "files": files,
-            "pods": pods,
-            "tags": tags,
-            "users": users,
-            "transactions": transactions,
-            "limit": limit,
-            "offset": offset,
-            "next_url": page_url(next_offset),
-            "prev_url": page_url(prev_offset),
-            "by_file": by_file,
-            "by_transaction": by_transaction,
         },
     )
 

@@ -9,7 +9,7 @@
       <div class="rail-row">
         <a href="/results/{{ item.transaction_id }}">
           <strong>{{ item.created_at[:19].replace('T',' ') }}</strong>
-          <span>{{ item.row_count }} rows · {{ item.downloads|length }} files{% if item.failed_count %} · {{ item.failed_count }} failed{% endif %}</span>
+          <span>{{ item.downloads|length }} file(s){% if item.failed_count %} · {{ item.failed_count }} warning(s){% endif %}</span>
         </a>
         <form method="post" action="/collections/{{ item.transaction_id }}/delete" onsubmit="return confirm('Delete this collection?');">
           <button class="icon-button" title="Delete">×</button>
