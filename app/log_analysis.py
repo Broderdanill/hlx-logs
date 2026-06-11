@@ -218,7 +218,11 @@ def rows_from_downloads(downloads: dict[str, bytes], requests: list[dict] | None
                 if len(parts) >= 2:
                     pod = parts[0] or pod
                     filename = parts[1] or filename
-            req = by_file.get(filename.lower()) or by_file.get(f"{pod}__{filename}".lower())
+            # Prefer the exact pod+filename request metadata. When the same
+            # filename is downloaded from multiple pods, a filename-only lookup
+            # would otherwise assign all parsed rows to whichever request was
+            # stored last.
+            req = by_file.get(f"{pod}__{filename}".lower()) or by_file.get(filename.lower())
             if req:
                 pod_data = req.get("pod") if isinstance(req.get("pod"), dict) else {}
                 log_type = req.get("log_type") if isinstance(req.get("log_type"), dict) else {}

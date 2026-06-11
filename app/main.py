@@ -37,7 +37,7 @@ runtime_config = RuntimeConfig(config)
 store = CollectionStore(config.storage)
 store.cleanup()
 
-APP_VERSION = "0.0.29"
+APP_VERSION = "0.0.30"
 
 app = FastAPI(title="hlx-logs", version=APP_VERSION)
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-only-change-me"), same_site="lax")
@@ -145,6 +145,7 @@ async def refresh_available_logs(jwt: str, *, force: bool = False) -> dict:
                 query=discovery.pod_query,
                 value_field=discovery.pod_value_field,
             )
+            pod_names = sorted(pod_names, key=lambda n: n.lower())
             pods = [PodConfig(id=name, label=name, tags=["discovered"]) for name in pod_names]
             by_filename: dict[str, LogTypeConfig] = {}
             for pod in pods:
@@ -204,7 +205,8 @@ async def refresh_available_logs(jwt: str, *, force: bool = False) -> dict:
                 "Runtime Services": 16,
                 "Other": 99,
             }
-            log_types = sorted(by_filename.values(), key=lambda l: (category_order.get(l.category, 50), l.filename.lower()))
+            # Keep the collect page predictable: pods and log files are sorted alphabetically.
+            log_types = sorted(by_filename.values(), key=lambda l: l.filename.lower())
             runtime_config.replace_discovered(pods, log_types)
             logger.info("Discovered %s pod(s) and %s log file type(s)", len(pods), len(log_types))
         except Exception as exc:
@@ -402,83 +404,80 @@ async def _collect_job(transaction_id: str, username: str, jwt: str, pair_dicts:
             "error": message,
         })
 
-    try:
-        for pod_data, log_data in pair_dicts:
-            pod_id = pod_data["id"]
-            filename = log_data["filename"]
-            directory = log_data.get("directory", "")
+    async def process_pair(pod_data: dict, log_data: dict) -> tuple[str, bytes] | None:
+        nonlocal step
+        pod_id = pod_data["id"]
+        filename = log_data["filename"]
+        directory = log_data.get("directory", "")
+        meta: dict = {"pod": pod_data, "log_type": log_data, "entry_id": None}
+        async with semaphore:
             _job_update(transaction_id, message=f"Requesting {filename} from {pod_id}", step=step, total=total)
             try:
                 entry_id = await client.create_log_request(pod_id, directory, filename, transaction_id)
-                request_meta.append({"pod": pod_data, "log_type": log_data, "entry_id": entry_id})
+                meta["entry_id"] = entry_id
+                request_meta.append(meta)
             except Exception as exc:
                 add_failure("request", pod_id, filename, exc, directory)
                 step += 3
                 _job_update(transaction_id, message=f"Skipped {filename} from {pod_id}: {exc}", step=min(step, total))
-                continue
+                return None
             step += 1
             _job_update(transaction_id, step=min(step, total))
 
-        entries: list[dict] = []
-        for meta in request_meta:
             entry_id = meta.get("entry_id")
-            pod_id = (meta.get("pod") or {}).get("id", "unknown")
-            log_type = meta.get("log_type") or {}
-            filename = log_type.get("filename", "unknown.log")
-            directory = log_type.get("directory", "")
             if not entry_id:
                 add_failure("read", pod_id, filename, "Missing entry id", directory)
                 step += 2
                 _job_update(transaction_id, step=min(step, total))
-                continue
+                return None
+
             try:
                 _job_update(transaction_id, message=f"Reading {filename} entry {entry_id}", step=step)
                 entry = await client.get_entry(entry_id)
                 entry["_hlx_entry_id"] = entry_id
                 entry["_hlx_request_meta"] = meta
-                entries.append(entry)
             except Exception as exc:
                 add_failure("read", pod_id, filename, exc, directory, entry_id)
-                entries.append({"values": {"Pod": pod_id, "Filename": filename, "Directory": directory}, "_hlx_entry_id": entry_id, "_hlx_request_meta": meta})
+                # Continue anyway: the attachment URL only needs the entry id.
+                entry = {"values": {"Pod": pod_id, "Filename": filename, "Directory": directory}, "_hlx_entry_id": entry_id, "_hlx_request_meta": meta}
             step += 1
             _job_update(transaction_id, step=min(step, total))
 
-        for entry in entries:
             values = entry.get("values", {})
-            meta = entry.get("_hlx_request_meta") or {}
-            meta_pod = (meta.get("pod") or {}).get("id") if isinstance(meta.get("pod"), dict) else None
-            meta_log_type = meta.get("log_type") or {}
-            entry_id = entry.get("_hlx_entry_id") or _entry_id_from_links(entry) or meta.get("entry_id")
-            pod = values.get("Pod") or meta_pod or "unknown"
-            filename = values.get("Filename") or meta_log_type.get("filename") or "unknown.log"
-            directory = values.get("Directory") or meta_log_type.get("directory") or ""
-            if not entry_id:
-                add_failure("download", pod, filename, "Entry has no id", directory)
-                step += 1
-                _job_update(transaction_id, step=min(step, total))
-                continue
-
-            _job_update(transaction_id, message=f"Downloading {filename} from {pod}", step=step)
+            # Trust the request metadata first. Some concurrent service-call
+            # responses may echo stale/current field values from another request,
+            # especially when the same filename is requested from multiple pods.
+            pod = pod_id
+            filename_for_store = filename
+            directory_for_store = directory
+            _job_update(transaction_id, message=f"Downloading {filename_for_store} from {pod}", step=step)
             blob = None
             deadline = asyncio.get_event_loop().time() + cfg.ar.poll_timeout_seconds
             last_error = None
             while asyncio.get_event_loop().time() < deadline:
                 try:
-                    blob = await client.download_attachment(entry_id)
+                    blob = await client.download_attachment(str(entry_id))
                     break
                 except Exception as exc:
                     last_error = exc
                     await asyncio.sleep(cfg.ar.poll_interval_seconds)
             if blob is None:
-                add_failure("download", pod, filename, last_error or "Attachment did not become available", directory, entry_id)
+                add_failure("download", pod, filename_for_store, last_error or "Attachment did not become available", directory_for_store, str(entry_id))
                 step += 1
-                _job_update(transaction_id, message=f"Skipped {filename} from {pod}: attachment unavailable", step=min(step, total))
-                continue
+                _job_update(transaction_id, message=f"Skipped {filename_for_store} from {pod}: attachment unavailable", step=min(step, total))
+                return None
 
-            key = f"{pod}__{filename}__{entry_id}.zip"
-            raw_downloads[key] = blob
+            key = f"{pod}__{filename_for_store}__{entry_id}.zip"
             step += 1
             _job_update(transaction_id, step=min(step, total))
+            return key, blob
+
+    semaphore = asyncio.Semaphore(max(1, int(getattr(cfg.ar, "collect_concurrency", 4))))
+    try:
+        results = await asyncio.gather(*(process_pair(pod_data, log_data) for pod_data, log_data in pair_dicts))
+        for item in results:
+            if item:
+                raw_downloads[item[0]] = item[1]
 
         if not raw_downloads and failures:
             raise ArRestError(f"No logs could be downloaded. {len(failures)} item(s) failed. First error: {failures[0]['error']}")

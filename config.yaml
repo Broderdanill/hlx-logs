@@ -7,6 +7,7 @@ ar:
   request_timeout_seconds: 60
   poll_interval_seconds: 2
   poll_timeout_seconds: 60
+  collect_concurrency: 4
   result_query_template: "'TransactionId' = \"{transaction_id}\""
 
 security:

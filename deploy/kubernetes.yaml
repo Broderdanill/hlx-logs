@@ -13,6 +13,7 @@ data:
       request_timeout_seconds: 60
       poll_interval_seconds: 2
       poll_timeout_seconds: 60
+      collect_concurrency: 4
       result_query_template: "'TransactionId' = \"{transaction_id}\""
     
     security:
@@ -77,6 +78,8 @@ spec:
               value: "/app/config.yaml"
             - name: DATA_DIR
               value: "/data"
+            - name: AR_COLLECT_CONCURRENCY
+              value: "4"
           volumeMounts:
             - name: hlx-logs-config
               mountPath: /app/config.yaml

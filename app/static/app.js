@@ -231,7 +231,7 @@
     initMermaid();
   } else {
     const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';
+    script.src = '/static/mermaid.min.js';
     script.onload = initMermaid;
     script.onerror = () => console.warn('Could not load Mermaid renderer; source remains visible.');
     document.head.appendChild(script);

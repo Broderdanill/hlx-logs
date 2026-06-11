@@ -6,7 +6,7 @@ The result interface provides a log-analysis view and a visual flow view while s
 
 ## Current version
 
-**0.0.29**
+**0.0.30**
 
 ## Run with Podman
 
@@ -142,6 +142,14 @@ Discovered log files are automatically categorized from their filenames and disp
 See `docs/log-categories.md` for the current category rules.
 
 ## Version history
+
+### 0.0.30
+
+- Collect page now sorts pods and log files alphabetically by name.
+- Log file size from `AR System Server Group Logs` is shown in the Collect list.
+- Collection fetches are processed with a configurable concurrency limit (`AR_COLLECT_CONCURRENCY`, default `4`) to reduce blocking when multiple users work at the same time.
+- Fixed parsed row metadata when the same filename is fetched from multiple pods; pod and filename are now matched from the exact download source.
+- Mermaid is now served locally from `/static/mermaid.min.js` instead of loading from the public CDN.
 
 ### 0.0.29
 

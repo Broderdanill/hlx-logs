@@ -56,7 +56,18 @@
             <span class="row-main">{{ log.label }}</span>
             <code>{{ log.filename }}</code>
             <span class="category">{{ log.category }}</span>
-            <small>{{ log.available_on_pods|length }} pod(s) · {{ log.tags|join(', ') if log.tags else log.directory }}</small>
+            <small>
+              {{ log.available_on_pods|length }} pod(s)
+              {% if log.file_sizes_by_pod %}
+                · size:
+                {% if log.file_sizes_by_pod|length == 1 %}
+                  {% for pod_name, size in log.file_sizes_by_pod.items() %}{% if loop.first %}{{ size }}{% endif %}{% endfor %}
+                {% else %}
+                  {% for pod_name, size in log.file_sizes_by_pod.items() %}{{ pod_name }}={{ size }}{% if not loop.last %}, {% endif %}{% endfor %}
+                {% endif %}
+              {% endif %}
+              · {{ log.tags|join(', ') if log.tags else log.directory }}
+            </small>
           </label>
         {% else %}
           <div class="empty">No log files discovered yet. Open Discovery and refresh.</div>

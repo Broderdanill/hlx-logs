@@ -18,6 +18,7 @@ class ArSettings:
     poll_interval_seconds: int = 2
     poll_timeout_seconds: int = 60
     result_query_template: str = "'TransactionId' = \"{transaction_id}\""
+    collect_concurrency: int = 4
 
 
 @dataclass
@@ -115,6 +116,7 @@ def load_config(path: str | Path) -> AppConfig:
         poll_interval_seconds=_env_int("AR_POLL_INTERVAL_SECONDS", ar_data.get("poll_interval_seconds", 2)),
         poll_timeout_seconds=_env_int("AR_POLL_TIMEOUT_SECONDS", ar_data.get("poll_timeout_seconds", 60)),
         result_query_template=os.getenv("AR_RESULT_QUERY_TEMPLATE", ar_data.get("result_query_template", "'TransactionId' = \"{transaction_id}\"")),
+        collect_concurrency=_env_int("AR_COLLECT_CONCURRENCY", ar_data.get("collect_concurrency", 4)),
     )
 
     storage_data = data.get("storage", {})
