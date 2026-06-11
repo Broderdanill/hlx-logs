@@ -6,7 +6,7 @@ The result interface provides a log-analysis view and a visual flow view while s
 
 ## Current version
 
-**0.0.28**
+**0.0.29**
 
 ## Run with Podman
 
@@ -142,6 +142,12 @@ Discovered log files are automatically categorized from their filenames and disp
 See `docs/log-categories.md` for the current category rules.
 
 ## Version history
+
+### 0.0.29
+
+- Simplified the pod list on the Collect page to show only the pod name.
+- Changed the Collect search placeholder to `Filter logs...`.
+- The Collect search now filters only log files; pods always remain visible and selectable.
 
 
 ### 0.0.28

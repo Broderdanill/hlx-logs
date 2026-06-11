@@ -3,7 +3,7 @@
   if (search) {
     search.addEventListener('input', () => {
       const term = search.value.toLowerCase();
-      document.querySelectorAll('[data-filter-area] > *').forEach((card) => {
+      document.querySelectorAll('.dense-table[data-filter-area] > *').forEach((card) => {
         const haystack = (card.dataset.search || '').toLowerCase();
         card.style.display = haystack.includes(term) ? '' : 'none';
       });

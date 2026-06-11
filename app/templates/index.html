@@ -16,7 +16,7 @@
 
   <form id="collectForm" method="post" action="/collect" class="selector-shell">
     <div class="collect-toolbar compact-collect-toolbar">
-      <input type="search" id="selectorSearch" class="collect-search" placeholder="Filter pods and logs...">
+      <input type="search" id="selectorSearch" class="collect-search" placeholder="Filter logs...">
       <label class="template-select-label">Template
         <select id="presetSelect" data-preset-select>
           <option value="custom" selected>Custom selection</option>
@@ -38,11 +38,9 @@
         <h2>Pods <span class="pill">{{ pods|length }}</span></h2>
         <div class="dense-list" data-filter-area>
         {% for pod in pods if pod.enabled %}
-          <label class="dense-row" data-search="{{ pod.id }} {{ pod.label }} {{ pod.tags|join(' ') }}">
+          <label class="dense-row pod-only-row">
             <input type="checkbox" name="pod_ids" value="{{ pod.id }}" {% if loop.first %}checked{% endif %}>
-            <span class="row-main">{{ pod.label }}</span>
-            <code>{{ pod.id }}</code>
-            <small>{{ pod.tags|join(' · ') }}</small>
+            <span class="row-main">{{ pod.id }}</span>
           </label>
         {% else %}
           <div class="empty">No pods discovered yet. Open Discovery and refresh.</div>

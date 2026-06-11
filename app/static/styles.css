@@ -604,3 +604,7 @@ input,select{background:#061827;border-color:#2a70ad;border-radius:7px;color:#f7
 .workflow-type-chip[data-workflow-type="service"].active{border-color:#ff9f43}
 .workflow-type-chip[data-workflow-type="error"].active{border-color:#ff4d3f}
 #mermaidDiagram svg rect.actor{stroke-width:2!important}
+
+/* 0.0.29: Collect pod list should be simple and always visible; log search filters logs only. */
+.pod-only-row { grid-template-columns: auto 1fr !important; }
+.pod-only-row .row-main { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
