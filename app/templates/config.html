@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="main-pane full">
+<section class="main-pane full discovery-page">
   <div class="pane-titlebar compact-title">
     <div>
       <h1>Discovery</h1>
@@ -19,10 +19,10 @@
   <div class="warning-panel">Last discovery warning: {{ discovery_status.last_error }}</div>
   {% endif %}
 
-  <div class="grid-two">
-    <section class="panel">
+  <div class="discovery-grid">
+    <section class="panel discovery-pods-panel">
       <h2>Discovered pods</h2>
-      <table class="data-table compact-table">
+      <table class="data-table compact-table discovery-table">
         <thead><tr><th>Pod</th><th>Tags</th></tr></thead>
         <tbody>
         {% for pod in pods %}
@@ -33,29 +33,28 @@
         </tbody>
       </table>
     </section>
-    <section class="panel">
+    <section class="panel discovery-logs-panel">
       <h2>Discovered log files</h2>
-      <table class="data-table compact-table">
-        <thead><tr><th>File</th><th>Category</th><th>Tags</th><th>Available on</th></tr></thead>
+      <table class="data-table compact-table discovery-table discovery-log-table">
+        <thead><tr><th>File</th><th>Category</th><th>Available</th></tr></thead>
         <tbody>
         {% for log in log_types %}
           <tr>
-            <td><code>{{ log.filename }}</code><br><small>{{ log.description }}</small></td>
+            <td><code>{{ log.filename }}</code><small>{{ log.description }}</small></td>
             <td>{{ log.category }}</td>
-            <td>{{ log.tags|join(', ') }}</td>
             <td>{{ log.available_on_pods|length }} pod(s)</td>
           </tr>
         {% else %}
-          <tr><td colspan="4">No log files discovered.</td></tr>
+          <tr><td colspan="3">No log files discovered.</td></tr>
         {% endfor %}
         </tbody>
       </table>
     </section>
   </div>
 
-  <section class="panel">
+  <section class="panel discovery-settings-panel">
     <h2>Discovery settings</h2>
-    <table class="data-table compact-table">
+    <table class="data-table compact-table discovery-settings-table">
       <tbody>
         <tr><th>Pod source form</th><td><code>{{ discovery.pod_form_name }}</code></td></tr>
         <tr><th>Pod query</th><td><code>{{ discovery.pod_query }}</code></td></tr>

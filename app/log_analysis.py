@@ -144,6 +144,8 @@ def infer_event_type(row: LogLine, raw: str) -> str:
         return "Change Field"
     if "refresh table action" in lower or "refresh field" in lower:
         return "Refresh Field"
+    if re.match(r"^\s*\d+\s*:", msg):
+        return "Action"
     if FILTER_PHASE_LINE_RE.search(msg):
         return "Filter Phase"
     if FILTER_CHECK_LINE_RE.search(msg):
@@ -418,172 +420,377 @@ def mermaid_escape(value: str, limit: int = 80) -> str:
     return value.replace('"', "'").replace("[", "(").replace("]", ")").replace("\n", " ")
 
 
-def build_mermaid_swimlane(events: list[dict], limit: int = 180) -> str:
-    """Build an AR workflow trace diagram similar to Remedy log trace views.
+def build_mermaid_swimlane(events: list[dict], limit: int = 220, hide_not_triggered: bool = False) -> str:
+    """Build a readable Mermaid overview for one AR filter TrID.
 
-    The diagram is a sequence diagram where each lane is a real workflow object
-    or target form when possible. It understands common Mid Tier / Progressive
-    active-link traces and server-side arfilter traces: event start/end, active
-    link start/end, guide calls/returns, set/change/refresh field, service
-    action, backchannel, filter phase/check/qualification and errors.
+    BMC's filter log is a linear execution trace: each AR transaction contains
+    one or more filter-processing frames, and inside each frame the server checks
+    filters in order. A filter can match the Run If branch, run Else actions, or
+    simply be checked and skipped. Filter guides and Service actions show up as
+    additional checks/frames in the same AR TrID, often repeating the same filter
+    series. The diagram therefore groups the trace by filter-processing frame and
+    then shows only the meaningful executed workflow blocks in order.
     """
-    source = [e for e in events if not _is_noise_event(e)][:limit]
+    source = [e for e in events if not _is_noise_event(e)]
     if not source:
-        return "sequenceDiagram\n  participant SYS as System\n  Note over SYS: No workflow events matched the current filters"
+        return "flowchart TD\n  empty[\"No workflow events matched the selected filter transaction\"]\n  classDef empty fill:#09243b,stroke:#00b9f6,color:#f7f7f7\n  class empty empty"
 
     def etype(ev: dict) -> str:
         return (ev.get("type") or ev.get("event_type") or "Log").strip()
 
-    def text(ev: dict) -> str:
-        return " ".join(str(ev.get(k) or "") for k in ["type", "workflow", "form", "field_name", "message", "file"]).strip()
+    def msg(ev: dict) -> str:
+        return (ev.get("message") or "").strip()
 
-    def kind(ev: dict) -> str:
-        t = etype(ev).lower()
-        msg = text(ev).lower()
-        fn = (ev.get("file") or "").lower()
-        lvl = (ev.get("level") or "").upper()
-        if t.startswith("event"):
-            return "client"
-        if "active link" in t or "active" in fn or "progressive" in fn:
-            return "active_link"
-        if "guide" in t or "guide" in msg:
-            return "guide"
-        if "filter" in t or fn.startswith("arfilter"):
-            return "filter"
-        if "escalation" in t or fn.startswith("aresc"):
-            return "escalation"
-        if "backchannel" in t or "service action" in t or "serviceaction" in msg:
-            return "service"
-        if "sql" in t or re.search(r"\b(select|update|insert|delete)\b", msg):
-            return "sql"
-        if lvl in {"ERROR", "FATAL", "SEVERE"} or "error" in t or "exception" in msg or "arerr" in msg:
-            return "error"
-        if any(x in t for x in ["set field", "change field", "refresh field", "branch", "action", "qualification"]):
-            # These belong to the current workflow lane when possible.
-            wf = ev.get("workflow") or ""
-            if wf and not wf.lower().startswith(("true actions", "false actions")):
-                if "filter" in fn or fn.startswith("arfilter"):
-                    return "filter"
-                return "active_link"
-        if ev.get("form"):
-            return "data"
-        return "system"
+    def low(ev: dict) -> str:
+        return " ".join(str(ev.get(k) or "") for k in ["type", "workflow", "form", "field_name", "message", "file"]).lower()
 
-    def label(ev: dict, k: str) -> str:
-        wf = (ev.get("workflow") or "").strip()
-        form = (ev.get("form") or "").strip()
-        field = (ev.get("field_name") or "").strip()
-        msg = ev.get("message") or ""
-        t = etype(ev)
-        if k == "client":
-            return form or "Client / User"
-        if k in {"active_link", "filter", "guide", "escalation"}:
-            if wf and wf.lower() not in {"true actions", "false actions", "action"}:
-                return wf
-        if k == "service":
-            return form or "Service / BackChannel"
-        if k == "data":
-            return form or "Form / Data"
-        if k == "sql":
-            return "Database / SQL"
-        if k == "error":
-            return "Errors / Warnings"
-        if field:
-            return field
-        # Target form lines from client logs.
-        m = re.search(r"Schema:\s*(.+)$", msg, re.I)
+    def label_text(value: str, limit_: int = 76) -> str:
+        value = compact(value or "", limit_)
+        value = value.replace("\\", "/")
+        # Keep Mermaid labels boring. Long/smart punctuation is a frequent cause
+        # of hard-to-debug bombs in generated diagrams.
+        for a, b in {
+            '"': "'", "[": "(", "]": ")", "{": "(", "}": ")", "<": "(", ">": ")",
+            "|": "/", "`": "'", ";": ",", "→": "->", "•": "-", "\n": " ", "\r": " "
+        }.items():
+            value = value.replace(a, b)
+        value = re.sub(r"\s+", " ", value).strip()
+        return value or "-"
+
+    def label_lines(parts: list[str], limit_: int = 76) -> str:
+        clean = [label_text(p, limit_) for p in parts if str(p or "").strip()]
+        return "<br/>".join(clean) if clean else "-"
+
+    def parse_operation(ev: dict) -> dict:
+        text = msg(ev)
+        m = re.search(r"(?:Start filter processing|End of filter processing) \(phase (\d+)\).*?Operation - ([A-Z]+) on (.+?)(?: - (\S+))?$", text, re.I)
+        if m:
+            form = m.group(3).strip()
+            return {
+                "phase": m.group(1),
+                "op": m.group(2).upper(),
+                "form": form,
+                "record": (m.group(4) or "").strip(),
+                "label": f"Phase {m.group(1)} - {m.group(2).upper()} on {form}",
+            }
+        form = ev.get("form") or "form/request"
+        return {"phase": "", "op": "", "form": form, "record": "", "label": compact(text or form, 90)}
+
+    def parse_filter_name(ev: dict) -> str:
+        text = msg(ev)
+        m = re.search(r"Checking\s+\"([^\"]+)\"", text, re.I)
         if m:
             return m.group(1).strip()
-        return wf or form or t or "System"
+        return (ev.get("workflow") or text.replace("Checking", "").strip(' \"') or "Filter").strip()
 
-    def aid_for(label_value: str, k: str) -> str:
-        base = re.sub(r"[^A-Za-z0-9]+", "_", f"{k}_{label_value}").strip("_").lower()[:48]
-        return base or k
+    def filter_level(ev: dict) -> str:
+        m = re.search(r"<Filter Level\s*:\s*(\d+)\s+Number Of Filters\s*:\s*(\d+)>", msg(ev), re.I)
+        if m:
+            return f"L{m.group(1)} #{m.group(2)}"
+        return ""
 
-    actors: dict[str, dict] = {}
-    normalized: list[tuple[dict, str, str]] = []
-    current_by_tx: dict[str, str] = {}
-    current_global = ""
+    def action_summary(ev: dict) -> str:
+        t = etype(ev)
+        text = msg(ev)
+        lower = text.lower()
+        field = ev.get("field_name") or ""
+
+        # Action rows are the most useful if we normalize them into intent.
+        if t == "Action" or re.match(r"^\s*\d+\s*:", text):
+            cleaned = re.sub(r"^\s*\d+\s*:\s*", "", text).strip()
+            if "service on schema" in lower:
+                m = re.search(r"Service on schema\s*[-=]*>?\s*\"?([^\"\n]+)\"?", text, re.I)
+                return f"Service: {compact(m.group(1).strip(), 64)}" if m else "Service action"
+            if "call guide" in lower:
+                m = re.search(r"Call Guide\s+\"?([^\"\n]+)\"?", text, re.I)
+                return f"Call guide: {compact(m.group(1).strip(), 64)}" if m else "Call guide"
+            if "exit guide" in lower:
+                return "Exit guide"
+            if "set fields" in lower:
+                return "Set fields"
+            if "push fields" in lower:
+                return "Push fields"
+            if "notify" in lower:
+                return "Notify"
+            if "run process" in lower:
+                return "Run process"
+            return compact(cleaned or text, 80)
+
+        if "call guide" in lower and "return" in lower:
+            m = re.search(r"Call Guide\s+\"?([^\"\n]+)\"?", text, re.I)
+            return f"Guide returned: {compact(m.group(1).strip(), 64)}" if m else "Guide returned"
+        if "perform-action-add-attachment" in lower:
+            m = re.search(r"PERFORM-ACTION-ADD-ATTACHMENT\s+\d+\s+\"([^\"]+)\"", text, re.I)
+            return f"Add attachment: {compact(m.group(1), 64)}" if m else "Add attachment"
+        if t in {"Set Field", "Set Fields"}:
+            m = re.search(r"([^=\n]{1,90})\s*=\s*(.{0,180})", text)
+            if m:
+                return f"Set {compact(m.group(1).strip(), 38)} = {compact(m.group(2).strip(), 46)}"
+            return f"Set {compact(field or text, 68)}"
+        if lower.startswith("exit code"):
+            return compact(text.replace("Exit code", "Output"), 84)
+        if t in {"Push Fields", "Open Window", "Run Process", "Guide Call", "Guide Return", "Service Action", "BackChannel Request", "BackChannel Response", "Change Field", "Refresh Field"}:
+            return compact(text or t, 84)
+        if t == "Error" or ev.get("level") in {"ERROR", "FATAL", "SEVERE"}:
+            return f"Error: {compact(text, 78)}"
+        if t == "Filter":
+            if lower.startswith("exit code"):
+                return compact(text.replace("Exit code", "Output"), 84)
+            # Detail lines after Set Fields often contain the field name before
+            # the next line reports the value/exit code. Keep them short.
+            return f"Detail: {compact(text, 72)}"
+        return compact(text or t, 84)
+
+    def action_priority(line: str) -> int:
+        l = line.lower()
+        if any(x in l for x in ["error", "service", "call guide", "guide returned", "add attachment", "push fields"]):
+            return 0
+        if any(x in l for x in ["set ", "output", "run process", "notify"]):
+            return 1
+        return 2
+
+    frames: list[dict] = []
+    current_frame: dict | None = None
+    current_filter: dict | None = None
+
+    def new_frame(meta: dict, ev: dict) -> dict:
+        return {
+            "meta": meta,
+            "user": ev.get("user") or "",
+            "time": ev.get("time") or "",
+            "filters": [],
+            "skipped": [],
+            "raw_count": 0,
+        }
+
+    def flush_filter():
+        nonlocal current_filter, current_frame
+        if not current_filter:
+            return
+        # Deduplicate action lines but keep usefulness/order.
+        seen: set[str] = set()
+        actions: list[str] = []
+        for item in current_filter.get("actions", []):
+            key = item.strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            actions.append(item)
+        actions.sort(key=action_priority)
+        current_filter["actions"] = actions[:4]
+        extra = max(0, len(actions) - 4)
+        if extra:
+            current_filter["more"] = extra
+        status = current_filter.get("status") or "unknown"
+        if current_frame is None:
+            current_frame = new_frame({"phase": "", "op": "", "form": "", "record": "", "label": "Workflow outside explicit phase"}, {})
+        if status == "skipped":
+            current_frame["skipped"].append(current_filter.get("name") or "Filter")
+            if not hide_not_triggered:
+                current_frame["filters"].append(current_filter)
+        else:
+            current_frame["filters"].append(current_filter)
+        current_filter = None
+
+    def flush_frame():
+        nonlocal current_frame
+        flush_filter()
+        if current_frame:
+            # When not-triggered checks are hidden, don't draw frames that only
+            # contain skipped filters; summarize them at the end instead.
+            if current_frame["filters"] or (current_frame["skipped"] and not hide_not_triggered):
+                frames.append(current_frame)
+        current_frame = None
 
     for ev in source:
-        k = kind(ev)
-        tx = ev.get("transaction") or "_global"
         t = etype(ev)
-        # Branch/action/field/qualification rows are rendered on current workflow lane.
-        if t in {"Branch", "Action", "Set Fields", "Set Field", "Change Field", "Refresh Field", "Qualification"} and current_by_tx.get(tx):
-            aid = current_by_tx[tx]
-            k = actors.get(aid, {}).get("kind", k)
-        else:
-            lab = clean_mermaid_label(label(ev, k), 66)
-            aid = aid_for(lab, k)
-            actors.setdefault(aid, {"label": lab, "kind": k})
-        if k in {"active_link", "filter", "guide", "escalation", "client"} and t not in {"Branch", "Action"}:
-            current_by_tx[tx] = aid
-            current_global = aid
-        elif not current_by_tx.get(tx) and current_global:
-            current_by_tx[tx] = current_global
-        normalized.append((ev, aid, k))
+        text_low = low(ev)
+        if t == "Transaction Marker":
+            continue
+        if t == "Filter Phase Start":
+            flush_frame()
+            current_frame = new_frame(parse_operation(ev), ev)
+            continue
+        if t == "Filter Phase End":
+            flush_frame()
+            continue
+        if current_frame:
+            current_frame["raw_count"] += 1
 
-    preferred = {"client":0,"escalation":1,"active_link":2,"guide":3,"filter":4,"service":5,"data":6,"sql":7,"error":8,"system":9}
-    ordered_actor_ids = sorted(actors, key=lambda a: (preferred.get(actors[a]["kind"], 99), list(actors).index(a)))
-    visible_ids = ordered_actor_ids[:22]
-    visible = set(visible_ids)
-    if len(ordered_actor_ids) > len(visible_ids):
-        actors.setdefault("system_other", {"label": "Other workflow", "kind": "system"})
-        visible.add("system_other")
-        visible_ids.append("system_other")
+        if t == "Filter Check":
+            flush_filter()
+            if current_frame is None:
+                current_frame = new_frame({"phase": "", "op": "", "form": ev.get("form") or "", "record": "", "label": "Workflow outside explicit phase"}, ev)
+            current_filter = {
+                "name": parse_filter_name(ev),
+                "level": filter_level(ev),
+                "status": "unknown",
+                "actions": [],
+                "line": ev.get("line") or "",
+            }
+            continue
+        if t == "Qualification" and current_filter:
+            # AR logs distinguish plain failed qualifications from failed checks
+            # where Else actions are actually performed.
+            if "failed" in text_low and "perform else actions" in text_low:
+                current_filter["status"] = "else"
+            elif "failed" in text_low:
+                current_filter["status"] = "skipped"
+            elif "passed" in text_low:
+                current_filter["status"] = "if"
+            continue
+        if t in {"Action", "Set Fields", "Set Field", "Change Field", "Refresh Field", "Field Action", "Push Fields", "Open Window", "Run Process", "Guide Call", "Guide Return", "Service Action", "BackChannel Request", "BackChannel Response", "Error", "Filter"} or ev.get("level") in {"ERROR", "FATAL", "SEVERE"}:
+            if current_filter:
+                current_filter.setdefault("actions", []).append(action_summary(ev))
+            elif current_frame is not None:
+                # Standalone guide returns/output are useful but not worth their own large node.
+                current_frame.setdefault("standalone", []).append(action_summary(ev))
+            continue
 
-    lines = ["sequenceDiagram", "  autonumber"]
-    box_info = {
-        "client": ("rgba(0,185,246,0.12)", "Client / Form"),
-        "active_link": ("rgba(73,196,73,0.14)", "Active Link"),
-        "guide": ("rgba(255,204,51,0.13)", "Guide"),
-        "filter": ("rgba(110,168,255,0.14)", "Filter"),
-        "escalation": ("rgba(201,122,255,0.14)", "Escalation"),
-        "service": ("rgba(255,159,67,0.14)", "Service / BackChannel"),
-        "data": ("rgba(0,185,246,0.08)", "Form / Data"),
-        "sql": ("rgba(255,204,51,0.10)", "SQL"),
-        "error": ("rgba(171,13,2,0.18)", "Errors / Warnings"),
-        "system": ("rgba(145,162,188,0.10)", "System"),
-    }
-    current_box = None
-    for aid in visible_ids:
-        akind = actors[aid].get("kind", "system")
-        if akind != current_box:
-            if current_box is not None:
-                lines.append("  end")
-            color, title = box_info.get(akind, box_info["system"])
-            lines.append(f"  box {color} {mermaid_sequence_escape(title, 40)}")
-            current_box = akind
-        lines.append(f"  participant {aid} as {mermaid_sequence_escape(actors[aid]['label'], 76)}")
-    if current_box is not None:
-        lines.append("  end")
+    flush_frame()
 
-    last_by_tx: dict[str, str] = {}
-    for ev, aid, k in normalized:
-        if aid not in visible:
-            aid = "system_other"
-        tx = ev.get("transaction") or "_global"
-        prev = last_by_tx.get(tx)
-        t = etype(ev)
-        msg = ev.get("message") or ""
-        lbl = event_label(ev)
-        if not prev:
-            lines.append(f"  Note over {aid}: {mermaid_sequence_escape(lbl, 150)}")
-        elif t.endswith("End") or t in {"Guide Return"}:
-            lines.append(f"  {aid}-->>{prev}: {mermaid_sequence_escape(lbl, 120)}")
-        elif t in {"Branch", "Action", "Set Fields", "Set Field", "Change Field", "Refresh Field", "Qualification"} or prev == aid:
-            arrow = "-->>" if t == "Qualification" and "failed" in msg.lower() else "->>"
-            lines.append(f"  {aid}{arrow}{aid}: {mermaid_sequence_escape(lbl, 130)}")
-        else:
-            lines.append(f"  {prev}->>{aid}: {mermaid_sequence_escape(lbl, 130)}")
-        note = event_note(ev)
-        if note:
-            lines.append(f"  Note over {aid}: {mermaid_sequence_escape(note, 220)}")
-        if not t.endswith("End"):
-            last_by_tx[tx] = aid
-    return "\n".join(lines)
+    # Prefer frames with real executed filters. If the selected transaction only
+    # contains failed checks, keep a few frames so the user can see that nothing ran.
+    if not frames:
+        return "flowchart TD\n  empty[\"No filter checks found for this AR TrID\"]\n  classDef empty fill:#09243b,stroke:#00b9f6,color:#f7f7f7\n  class empty empty"
 
+    tx = next((e.get("transaction") for e in source if e.get("transaction")), "selected AR TrID")
+    user = next((e.get("user") for e in source if e.get("user")), "")
+    total_skipped = sum(len(f.get("skipped", [])) for f in frames)
+    total_filters = sum(len(f.get("filters", [])) for f in frames)
+
+    # Limit in human terms, not raw log rows. Extra frames are summarized.
+    visible_frames = frames[: min(len(frames), 14)]
+    hidden_frames = max(0, len(frames) - len(visible_frames))
+
+    out: list[str] = [
+        "flowchart TD",
+        "  %% AR filter transaction story: grouped by filter-processing frame. Top-to-bottom is execution order.",
+        "  classDef start fill:#06192b,stroke:#00b9f6,color:#f7f7f7,stroke-width:2px",
+        "  classDef frame fill:#082138,stroke:#165a9b,color:#f7f7f7,stroke-width:1.5px",
+        "  classDef ifrun fill:#0b2b49,stroke:#49c449,color:#f7f7f7,stroke-width:1.5px",
+        "  classDef elserun fill:#2d2544,stroke:#ffd166,color:#f7f7f7,stroke-width:1.5px",
+        "  classDef skipped fill:#261d26,stroke:#8aa0b6,color:#d8e1ea,stroke-dasharray: 4 3",
+        "  classDef note fill:#09243b,stroke:#00b9f6,color:#dceafa",
+    ]
+
+    def add_node(nid: str, label: list[str], cls: str):
+        out.append(f"  {nid}[\"{label_lines(label)}\"]")
+        out.append(f"  class {nid} {cls}")
+
+    add_node("start", ["Start", f"AR TrID {tx}", f"User {user}" if user else "", f"Frames {len(frames)} / filters {total_filters}"], "start")
+    prev = "start"
+    edge_counter = 0
+    node_counter = 0
+
+    for frame_index, frame in enumerate(visible_frames, 1):
+        meta = frame.get("meta") or {}
+        op_label = meta.get("label") or "Filter processing"
+        phase = meta.get("phase") or "?"
+        form = meta.get("form") or ""
+        rec = meta.get("record") or ""
+        skipped_count = len(frame.get("skipped", []))
+        filters = frame.get("filters", [])
+
+        frame_in = f"f{frame_index}_in"
+        frame_out = f"f{frame_index}_out"
+        title = label_text(f"{frame_index}. Phase {phase} - {meta.get('op') or 'Operation'}", 54)
+        out.append(f"  subgraph frame{frame_index}[\"{title}\"]")
+        out.append("    direction TB")
+        # Nodes inside subgraph need extra indentation only for readability.
+        out.append(f"    {frame_in}[\"{label_lines(['Input', op_label, f'Record {rec}' if rec else ''], 70)}\"]")
+        out.append(f"    class {frame_in} frame")
+        local_prev = frame_in
+
+        for filt_index, flt in enumerate(filters[:10], 1):
+            node_counter += 1
+            nid = f"f{frame_index}_n{filt_index}"
+            status = flt.get("status") or "unknown"
+            cls = "elserun" if status == "else" else ("skipped" if status == "skipped" else "ifrun")
+            branch = "ELSE actions" if status == "else" else ("Not triggered" if status == "skipped" else "IF actions")
+            actions = flt.get("actions") or []
+            lines = [f"{frame_index}.{filt_index} {branch}", flt.get("name") or "Filter"]
+            if flt.get("level"):
+                lines.append(flt.get("level"))
+            if actions:
+                lines.append("Output: " + actions[0])
+                for action in actions[1:3]:
+                    lines.append("+ " + action)
+                if flt.get("more"):
+                    lines.append(f"+ {flt['more']} more")
+            elif status == "skipped":
+                lines.append("Output: none")
+            else:
+                lines.append("Output: no action line logged")
+            out.append(f"    {nid}[\"{label_lines(lines, 72)}\"]")
+            out.append(f"    class {nid} {cls}")
+            edge_counter += 1
+            out.append(f"    {local_prev} -->|{edge_counter}| {nid}")
+            local_prev = nid
+
+        if len(filters) > 10:
+            more_id = f"f{frame_index}_more"
+            out.append(f"    {more_id}[\"{label_lines(['More executed filters', f'{len(filters)-10} additional blocks hidden in diagram'], 70)}\"]")
+            out.append(f"    class {more_id} note")
+            edge_counter += 1
+            out.append(f"    {local_prev} -->|{edge_counter}| {more_id}")
+            local_prev = more_id
+
+        if skipped_count and hide_not_triggered:
+            skip_id = f"f{frame_index}_skip"
+            out.append(f"    {skip_id}[\"{label_lines(['Hidden not-triggered checks', str(skipped_count)], 70)}\"]")
+            out.append(f"    class {skip_id} note")
+            edge_counter += 1
+            out.append(f"    {local_prev} -.->|{edge_counter}| {skip_id}")
+            local_prev = skip_id
+
+        standalone = frame.get("standalone") or []
+        if standalone:
+            stand_id = f"f{frame_index}_standalone"
+            stand = standalone[:3]
+            out.append(f"    {stand_id}[\"{label_lines(['Other output'] + stand, 70)}\"]")
+            out.append(f"    class {stand_id} note")
+            edge_counter += 1
+            out.append(f"    {local_prev} -->|{edge_counter}| {stand_id}")
+            local_prev = stand_id
+
+        out.append(f"    {frame_out}[\"{label_lines(['End frame', form], 70)}\"]")
+        out.append(f"    class {frame_out} frame")
+        edge_counter += 1
+        out.append(f"    {local_prev} -->|{edge_counter}| {frame_out}")
+        out.append("  end")
+        edge_counter += 1
+        out.append(f"  {prev} -->|{edge_counter}| {frame_in}")
+        prev = frame_out
+
+    if hidden_frames:
+        add_node("hidden_frames", ["Additional frames hidden", f"{hidden_frames} more filter-processing frames", "Open Log view for full raw trace"], "note")
+        edge_counter += 1
+        out.append(f"  {prev} -->|{edge_counter}| hidden_frames")
+        prev = "hidden_frames"
+
+    add_node("finish", ["End", f"Skipped checks total {total_skipped}" if total_skipped else "No skipped checks in visible trace"], "note")
+    edge_counter += 1
+    out.append(f"  {prev} -->|{edge_counter}| finish")
+    return "\n".join(out)
+
+def mermaid_flow_label(value: str, limit: int = 110) -> str:
+    value = compact(value or "", limit)
+    value = value.replace("\\", "/")
+    value = value.replace('"', "'")
+    value = value.replace("[", "(").replace("]", ")").replace("{", "(").replace("}", ")")
+    value = value.replace("<", "(").replace(">", ")").replace("|", "/")
+    value = value.replace("`", "'").replace(";", ",")
+    value = re.sub(r"\s+", " ", value).strip()
+    return value or "Workflow"
+
+
+def mermaid_flow_edge(value: str, limit: int = 46) -> str:
+    value = compact(value or "", limit)
+    value = value.replace('"', "'").replace("|", "/").replace("<", "(").replace(">", ")")
+    value = value.replace("[", "(").replace("]", ")").replace("{", "(").replace("}", ")")
+    value = value.replace("`", "'").replace(";", ",").replace(":", " -")
+    return re.sub(r"\s+", " ", value).strip()
 
 def _is_noise_event(ev: dict) -> bool:
     t = (ev.get("type") or "").lower()

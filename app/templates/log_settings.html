@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="main-pane full-pane log-settings-pane">
+  <div class="pane-titlebar">
+    <div>
+      <h1>AR log settings</h1>
+      <p>Controls future AR Server logging by updating <code>Debug-mode</code> and related <code>*-Log-File</code> settings in <code>AR System Configuration Component Setting</code>.</p>
+      <p class="muted">This is separate from Collect logs, which only lists log files that already exist and can be fetched.</p>
+    </div>
+  </div>
+
+  {% if log_control_status %}
+    <div class="success-panel">AR log settings: {{ log_control_status }}.</div>
+  {% endif %}
+  {% if log_control_error %}
+    <div class="warning-panel">AR log settings warning: {{ log_control_error }}</div>
+  {% endif %}
+
+  <form method="get" action="/log-settings" class="settings-toolbar log-settings-server-form" data-no-loading="true">
+    <label>
+      <span>Base server / pod</span>
+      <select name="server" onchange="this.form.submit()">
+        {% for server_name in server_names %}
+          <option value="{{ server_name }}" {% if server_name == selected_server %}selected{% endif %}>{{ server_name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="settings-current-value">
+      <span>Current Debug-mode for base server</span>
+      <strong>{{ current_debug_mode }}</strong>
+    </div>
+    <small class="muted">The log-type checkboxes below are loaded from the base server. Save can apply the same bitmask to one or more selected pods.</small>
+  </form>
+
+  <form id="logControlForm" method="post" action="/logs/control/save" data-loading-message="Saving AR log settings...">
+    <div class="selector-shell log-settings-shell">
+      <div class="settings-help compact-info log-settings-actions-row">
+        <div>
+          <strong>Log settings</strong>
+          <span>Select target pods, choose a template or toggle individual server debug log types. Save writes the same Debug-mode bitmask and filename settings to every selected pod.</span>
+        </div>
+        <div class="settings-action-controls">
+          <label class="template-picker">
+            <span>Template</span>
+            <select id="logSettingsTemplate">
+              <option value="">Custom</option>
+              {% for template in log_setting_templates %}
+                <option value="{{ template.logs|join(',') }}">{{ template.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <button type="submit" class="primary log-settings-save">Save log settings</button>
+        </div>
+      </div>
+
+      <div class="settings-targets-panel">
+        <div class="settings-targets-title">
+          <strong>Target pods</strong>
+          <span>Choose which pods should be updated when you press Save.</span>
+        </div>
+        <div class="settings-targets-grid">
+          {% for server_name in server_names %}
+            {% set debug_value = debug_modes_by_server.get(server_name) %}
+            <label class="settings-target-chip {% if server_name == selected_server %}selected{% endif %}">
+              <span class="switch switch-sm" aria-hidden="true">
+                <input type="checkbox" name="server_names" value="{{ server_name }}" {% if server_name == selected_server %}checked{% endif %}>
+                <span class="switch-track"></span>
+              </span>
+              <span class="target-name">{{ server_name }}</span>
+              <small>{% if debug_value is none %}read failed{% else %}Debug-mode {{ debug_value }}{% endif %}</small>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+
+
+      <div class="settings-restrict-panel">
+        <label class="settings-restrict-toggle">
+          <span class="switch switch-sm" aria-hidden="true">
+            <input type="checkbox" name="restrict_log_users_enabled" {% if restrict_log_users_enabled %}checked{% endif %}>
+            <span class="switch-track"></span>
+          </span>
+          <span>Restrict server logging to specific users</span>
+        </label>
+        <input type="text" name="restrict_log_users" value="{{ restrict_log_users }}" placeholder="user1;user2;user3" aria-label="Restrict log users">
+        <input type="hidden" name="original_restrict_log_users" value="{{ restrict_log_users }}">
+        <small class="muted">Semicolon-separated AR login names. When unchecked, the Restrict-Log-Users setting is removed for selected pods.</small>
+      </div>
+
+      <div class="dense-table log-settings-table">
+        <div class="log-settings-header log-settings-row">
+          <span>On</span>
+          <span>Log type</span>
+          <span>Bit</span>
+          <span>Filename</span>
+        </div>
+        {% for item in log_control_definitions %}
+          <div class="log-settings-row" data-log-control-row data-log-key="{{ item.key }}">
+            <label class="log-toggle-cell" title="Enable or disable {{ item.label }} logging">
+              <span class="switch switch-sm" aria-hidden="true">
+                <input type="checkbox" class="log-control-enabled" name="log_keys" value="{{ item.key }}" {% if item.enabled %}checked{% endif %}>
+                <span class="switch-track"></span>
+              </span>
+            </label>
+            <span class="row-main">{{ item.label }}</span>
+            <small>{{ item.bit_value }}</small>
+            <input class="log-filename-input" type="text" name="filename_{{ item.key }}" value="{{ item.filename }}" aria-label="Filename for {{ item.label }}" title="{{ item.filename_setting }}">
+            <input type="hidden" name="original_filename_{{ item.key }}" value="{{ item.filename }}">
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </form>
+</section>
+{% endblock %}

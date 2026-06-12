@@ -6,17 +6,28 @@
       <h1>Collect logs</h1>
       <p>Signed in as <strong>{{ username }}</strong>. Requests go to <code>{{ ar.form_name }}</code> at <code>{{ ar.base_url }}</code>.</p>
       <p class="muted">
-        Available pods and logs are discovered from AR REST.
+        Available pods and log files are discovered from AR REST. Log settings are managed separately.
         {% if discovery_status.last_success_at %}Last refresh {{ discovery_status.last_success_at[:19].replace('T',' ') }}.{% endif %}
         {% if discovery_status.last_error %}<span class="warning-text">Discovery warning: {{ discovery_status.last_error }}</span>{% endif %}
       </p>
     </div>
-
+    <div class="header-actions">
+      <a class="secondary" href="/log-settings">Log settings</a>
+    </div>
   </div>
 
-  <form id="collectForm" method="post" action="/collect" class="selector-shell">
+  <div class="home-create-tabs" role="tablist" aria-label="Create collection method">
+    <button type="button" class="home-create-tab active" data-home-tab="fetch" role="tab" aria-selected="true">Fetch from AR</button>
+    <button type="button" class="home-create-tab" data-home-tab="upload" role="tab" aria-selected="false">Upload / paste logs</button>
+  </div>
+
+  <form id="collectForm" method="post" action="/collect" class="selector-shell home-tab-panel active" data-home-panel="fetch" onkeydown="if(event.key==='Enter' && event.target && event.target.id==='selectorSearch'){event.preventDefault(); return false;}">
     <div class="collect-toolbar compact-collect-toolbar">
       <input type="search" id="selectorSearch" class="collect-search" placeholder="Filter logs...">
+      <label class="zero-size-filter" title="Hide log files where discovered size is 0 KB">
+        <input type="checkbox" id="hideZeroLogs">
+        <span>Hide 0 KB</span>
+      </label>
       <label class="template-select-label">Template
         <select id="presetSelect" data-preset-select>
           <option value="custom" selected>Custom selection</option>
@@ -49,25 +60,31 @@
       </section>
       <section>
         <h2>Available log files <span class="pill">{{ log_types|length }}</span></h2>
-        <div class="dense-table" data-filter-area>
+        <div class="dense-table available-log-table" data-filter-area>
+          <div class="log-table-header log-row-with-size" aria-hidden="true">
+            <span></span>
+            <span>Log</span>
+            <span>Filename</span>
+            <span>Size</span>
+            <span>Category</span>
+            <span>Info</span>
+          </div>
         {% for log in log_types if log.enabled %}
-          <label class="log-row" data-preset-tags="{{ log.category|lower }} {{ log.parser }} {{ log.severity }} {{ log.tags|join(' ') }} {{ log.id }}" data-search="{{ log.id }} {{ log.label }} {{ log.filename }} {{ log.directory }} {{ log.category }} {{ log.tags|join(' ') }} {{ log.description }}">
+          <label class="log-row log-row-with-size" data-preset-tags="{{ log.category|lower }} {{ log.parser }} {{ log.severity }} {{ log.tags|join(' ') }} {{ log.id }}" data-search="{{ log.id }} {{ log.label }} {{ log.filename }} {{ log.directory }} {{ log.category }} {{ log.tags|join(' ') }} {{ log.description }}">
             <input type="checkbox" name="log_type_ids" value="{{ log.id }}" >
             <span class="row-main">{{ log.label }}</span>
             <code>{{ log.filename }}</code>
-            <span class="category">{{ log.category }}</span>
-            <small>
-              {{ log.available_on_pods|length }} pod(s)
+            <span class="log-size-cell">
               {% if log.file_sizes_by_pod %}
-                · size:
                 {% if log.file_sizes_by_pod|length == 1 %}
-                  {% for pod_name, size in log.file_sizes_by_pod.items() %}{% if loop.first %}{{ size }}{% endif %}{% endfor %}
+                  {% for pod_name, size in log.file_sizes_by_pod.items() %}{% if loop.first %}{{ size or '-' }}{% endif %}{% endfor %}
                 {% else %}
-                  {% for pod_name, size in log.file_sizes_by_pod.items() %}{{ pod_name }}={{ size }}{% if not loop.last %}, {% endif %}{% endfor %}
+                  {% for pod_name, size in log.file_sizes_by_pod.items() %}<span title="{{ pod_name }}">{{ pod_name }}={{ size or '-' }}</span>{% if not loop.last %}<br>{% endif %}{% endfor %}
                 {% endif %}
-              {% endif %}
-              · {{ log.tags|join(', ') if log.tags else log.directory }}
-            </small>
+              {% else %}-{% endif %}
+            </span>
+            <span class="category">{{ log.category }}</span>
+            <small>{{ log.available_on_pods|length }} pod(s) · {{ log.tags|join(', ') if log.tags else log.directory }}</small>
           </label>
         {% else %}
           <div class="empty">No log files discovered yet. Open Discovery and refresh.</div>
@@ -76,5 +93,59 @@
       </section>
     </div>
   </form>
+
+  <section class="selector-shell home-tab-panel upload-create-panel" data-home-panel="upload" hidden>
+    <form method="post" action="/upload" enctype="multipart/form-data" class="upload-panel paste-capable-form home-upload-form" data-loading-message="Uploading logs...">
+      <div class="settings-help compact-info">
+        <div>
+          <strong>Create collection from uploaded logs</strong>
+          <span>Upload log files, zip archives, or paste log text. This creates the same searchable collection as fetch.</span>
+        </div>
+      </div>
+      <div class="form-grid compact-form">
+        <label>
+          <span>Collection name</span>
+          <input name="collection_name" placeholder="Example: customer case 2026-06-10">
+        </label>
+        <label>
+          <span>Default pod/source</span>
+          <input name="default_pod" value="uploaded" placeholder="uploaded">
+        </label>
+      </div>
+
+      <label class="drop-zone compact-drop-zone">
+        <input type="file" name="files" multiple accept=".log,.txt,.out,.zip,.gz">
+        <span class="drop-title">Drop log files or zip archives here</span>
+        <span class="drop-subtitle">Multiple files and nested zip archives are supported.</span>
+      </label>
+
+      <div class="form-grid compact-form">
+        <label>
+          <span>Pasted log filename</span>
+          <input name="pasted_log_name" value="pasted.log" placeholder="arfilter.log or active-link.log">
+        </label>
+        <label>
+          <span>Log type if filename is unknown</span>
+          <select name="pasted_log_type">
+            <option value="auto">Auto-detect</option>
+            <option value="active-link">Active Link</option>
+            <option value="progressive-active-link">Progressive Active Link</option>
+            <option value="filter">Filter</option>
+            <option value="escalation">Escalation</option>
+            <option value="generic">Generic log</option>
+          </select>
+        </label>
+      </div>
+      <label class="paste-field standalone-paste">
+        <span>Paste log text directly</span>
+        <textarea name="pasted_log_text" placeholder="Paste Active Link, filter, escalation or other log text here..."></textarea>
+      </label>
+
+      <div class="form-actions home-upload-actions">
+        <button class="primary">Create collection from upload / paste</button>
+      </div>
+    </form>
+  </section>
+
 </section>
 {% endblock %}

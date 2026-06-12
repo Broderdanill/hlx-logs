@@ -23,7 +23,6 @@
       <a href="/results/{{ result.transaction_id }}/download-all" class="buttonlike primary"><span class="btn-icon">↓</span> Download all logs</a>
       <form method="post" action="/collections/{{ result.transaction_id }}/delete" onsubmit="return confirm('Delete this collection?');"><button class="danger-button"><span class="btn-icon">×</span> Delete</button></form>
       <button type="button" class="secondary" data-toggle-upload><span class="btn-icon">↑</span> Upload / paste logs</button>
-      <a href="/" class="buttonlike secondary"><span class="btn-icon">+</span> Collect more</a>
     </div>
   </div>
 
@@ -59,13 +58,14 @@
 
   <div class="result-tabs">
     <a class="tab-link {% if active_tab == 'logs' %}active{% endif %}" href="/results/{{ result.transaction_id }}?tab=logs">Log view</a>
-    <a class="tab-link {% if active_tab == 'visual' %}active{% endif %}" href="/results/{{ result.transaction_id }}?tab=visual">Visual flow</a>
+    {% if active_tab == 'visual' %}<span class="tab-link active">Filter transaction flow</span>{% endif %}
     <a class="tab-link {% if active_tab == 'downloads' %}active{% endif %}" href="/results/{{ result.transaction_id }}?tab=downloads">Downloads</a>
   </div>
 
-  {% if active_tab in ['logs', 'visual'] %}
+  {% if active_tab == 'logs' %}
   <form method="get" action="/results/{{ result.transaction_id }}" class="analysis-filterbar compact-filterbar">
     <input type="hidden" name="tab" value="{{ active_tab }}">
+    {% if active_tab == 'visual' and filters.tx %}<input type="hidden" name="tx" value="{{ filters.tx }}">{% endif %}
     <input type="hidden" name="cols" id="visibleColumnsInput" value="{{ selected_columns|join(',') }}">
     <input type="hidden" name="wf_types" id="workflowTypesInput" value="{{ filters.wf_types }}">
     <label class="field-label wide-field">Search
@@ -100,7 +100,7 @@
         </label>
         <label class="inline-check field-label ignore-failed-toggle" title="Hide workflow objects/actions that failed their qualification and did not actually run.">
           <span>Workflow</span>
-          <span class="check-row"><input type="checkbox" name="ignore_failed" value="1" {% if filters.ignore_failed %}checked{% endif %}> Ignore failed qualifications</span>
+          <span class="check-row"><input type="checkbox" name="ignore_failed" value="1" {% if filters.ignore_failed %}checked{% endif %}> Hide failed / not-triggered branches</span>
         </label>
         <label class="field-label">Limit
           <select name="limit">
@@ -117,7 +117,7 @@
       </div>
     </details>
     <button class="primary">Apply</button>
-    <a class="buttonlike secondary" href="/results/{{ result.transaction_id }}?tab={{ active_tab }}">Reset</a>
+    <a class="buttonlike secondary" href="/results/{{ result.transaction_id }}?tab={{ active_tab }}{% if active_tab == 'visual' and filters.tx %}&tx={{ filters.tx|urlencode }}{% endif %}">Reset</a>
   </form>
   <datalist id="usersList">{% for item, count in facets.users %}<option value="{{ item }}">{{ count }}</option>{% endfor %}</datalist>
   <datalist id="formsList">{% for item, count in facets.forms %}<option value="{{ item }}">{{ count }}</option>{% endfor %}</datalist>
@@ -150,7 +150,14 @@
             {% if 'form' in selected_columns %}<td class="small-cell col-form">{{ row.form or '-' }}</td>{% endif %}
             {% if 'event' in selected_columns %}<td class="col-event">{{ row.event_type or row.operation or 'Log' }}</td>{% endif %}
             {% if 'pod_file' in selected_columns %}<td class="small-cell col-podfile" title="{{ row.pod }} / {{ row.filename }}">{{ row.pod }} / {{ row.filename }}</td>{% endif %}
-            {% if 'transaction' in selected_columns %}<td class="small-cell col-tx"><code>{{ row.transaction or row.tid or row.rpc_id or '-' }}</code></td>{% endif %}
+            {% if 'transaction' in selected_columns %}<td class="small-cell col-tx">
+              {% set tx_value = row.transaction or row.tid or row.rpc_id %}
+              {% if tx_value and row.filename and row.filename.lower().startswith('arfilter') %}
+                <a class="tx-flow-link" href="/results/{{ result.transaction_id }}?tab=visual&tx={{ tx_value|urlencode }}&ignore_failed=1">{{ tx_value }}</a>
+              {% elif tx_value %}
+                <code>{{ tx_value }}</code>
+              {% else %}-{% endif %}
+            </td>{% endif %}
             {% if 'workflow' in selected_columns %}<td class="small-cell col-workflow">{{ row.workflow or '-' }}</td>{% endif %}
             {% if 'field' in selected_columns %}<td class="small-cell col-field">{{ row.field_name or '-' }}</td>{% endif %}
             {% if 'message' in selected_columns %}<td class="message-cell col-message" title="{{ row.message }}">{{ row.message }}</td>{% endif %}
@@ -168,8 +175,17 @@
   <section class="visual-shell visual-mermaid-shell">
     <div class="flow-canvas mermaid-canvas">
       <div class="flow-head">
-        <h2>Workflow sequence</h2>
-        <p class="muted">Each lane represents an AR object or target. Self-messages show set/change/refresh actions; arrows show calls, guide transitions, service/backchannel requests and returns.</p>
+        <h2>Filter transaction flow</h2>
+        {% if filters.tx %}
+          <p class="muted visual-context-line">
+            <span>Transaction</span> <code>{{ filters.tx }}</code>
+            {% if visual_user %}<span>· User</span> <code>{{ visual_user }}</code>{% endif %}
+            {% if visual_row_count %}<span>· {{ visual_row_count }} filter log row(s)</span>{% endif %}
+          </p>
+          <p class="muted visual-context-subline">This view is focused on one AR filter transaction from <code>arfilter.log</code>; use Log view to pick another TrID.</p>
+        {% else %}
+          <p class="muted">Open Log view and click a filter log Transaction ID to visualize one server-side filter transaction.</p>
+        {% endif %}
       </div>
       <div class="mermaid-toolbar visual-toolbar">
         <div class="row visual-actions">
@@ -179,15 +195,15 @@
           <button type="button" class="secondary" data-copy-mermaid>Copy Mermaid</button>
           <button type="button" class="secondary" data-download-mermaid>Download SVG</button>
         </div>
-        <span class="muted">Use zoom and scroll to inspect large workflow traces.</span>
+        <span class="muted">Use zoom and scroll to inspect this transaction. Start from Log view and choose another TrID to change flow.</span>
       </div>
-      <div class="workflow-legend" aria-label="Workflow type filters">
-        {% for wf_type in workflow_type_order %}
-          <button type="button" class="workflow-type-chip {% if wf_type in selected_workflow_types %}active{% else %}inactive{% endif %}" data-workflow-type="{{ wf_type }}" title="Toggle {{ workflow_type_labels[wf_type] }} in the visual flow">
-            <i class="legend-dot legend-{{ wf_type|replace('_link','') }}"></i> {{ workflow_type_labels[wf_type] }}
-          </button>
-        {% endfor %}
-      </div>
+      {% if filters.tx %}
+      <form method="get" action="/results/{{ result.transaction_id }}" class="visual-mini-filter" data-no-loading="true">
+        <input type="hidden" name="tab" value="visual">
+        <input type="hidden" name="tx" value="{{ filters.tx }}">
+        <label class="inline-check visual-triggered-only"><input type="checkbox" name="ignore_failed" value="1" onchange="this.form.submit()" {% if filters.ignore_failed %}checked{% endif %}> Hide failed / not-triggered branches</label>
+      </form>
+      {% endif %}
       <div class="mermaid-scroll dark-mermaid-scroll">
         <pre class="mermaid" id="mermaidDiagram">{{ mermaid_code }}</pre>
       </div>

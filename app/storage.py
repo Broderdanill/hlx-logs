@@ -386,11 +386,18 @@ class CollectionStore:
         self._write_index(target, rows)
         return True
 
-    def query_rows(self, transaction_id: str, *, owner: str | None = None, q: str = "", user: str = "", form: str = "", start: str = "", end: str = "", file: str = "", level: str = "", ignore_failed: bool = False, limit: int = 500) -> dict | None:
+    def query_rows(self, transaction_id: str, *, owner: str | None = None, q: str = "", user: str = "", form: str = "", start: str = "", end: str = "", file: str = "", level: str = "", ignore_failed: bool = False, tx: str = "", limit: int = 500) -> dict | None:
         if not self.ensure_index(transaction_id, owner=owner):
             return None
         target = self.path_for(transaction_id)
         where, args = self._build_where(q=q, user=user, form=form, start=start, end=end, file=file, level=level, ignore_failed=ignore_failed)
+        if tx.strip():
+            extra_clause = "(transaction_id = ? OR tid = ? OR rpc_id = ?)"
+            if where:
+                where += " AND " + extra_clause
+            else:
+                where = " WHERE " + extra_clause
+            args.extend([tx.strip(), tx.strip(), tx.strip()])
         conn = self._connect(target)
         try:
             total = conn.execute("SELECT COUNT(*) FROM rows").fetchone()[0]
@@ -427,18 +434,28 @@ class CollectionStore:
         finally:
             conn.close()
 
-    def query_flow_rows(self, transaction_id: str, *, owner: str | None = None, q: str = "", user: str = "", form: str = "", start: str = "", end: str = "", file: str = "", level: str = "", ignore_failed: bool = False, limit: int = 200, workflow_only: bool = False) -> list[dict] | None:
+    def query_flow_rows(self, transaction_id: str, *, owner: str | None = None, q: str = "", user: str = "", form: str = "", start: str = "", end: str = "", file: str = "", level: str = "", ignore_failed: bool = False, tx: str = "", limit: int = 200, workflow_only: bool = False, filter_log_only: bool = False) -> list[dict] | None:
         if not self.ensure_index(transaction_id, owner=owner):
             return None
         target = self.path_for(transaction_id)
         where, args = self._build_where(q=q, user=user, form=form, start=start, end=end, file=file, level=level, ignore_failed=ignore_failed)
+        if tx.strip():
+            extra_clause = "(transaction_id = ? OR tid = ? OR rpc_id = ?)"
+            if where:
+                where += " AND " + extra_clause
+            else:
+                where = " WHERE " + extra_clause
+            args.extend([tx.strip(), tx.strip(), tx.strip()])
         extra = " AND " if where else " WHERE "
         event_filter = "(event_type != '' OR transaction_id != '' OR tid != '' OR rpc_id != '' OR user_name != '' OR form_name != '' OR level IN ('ERROR','WARN'))"
         if workflow_only:
             workflow_filter = "("
-            workflow_filter += "LOWER(filename) LIKE 'arfilter%' OR LOWER(filename) LIKE 'aresc%' OR LOWER(filename) LIKE '%escalation%' "
-            workflow_filter += "OR LOWER(filename) LIKE '%active%link%' OR LOWER(filename) LIKE '%active_link%' OR LOWER(filename) LIKE '%progressive%' "
-            workflow_filter += "OR event_type IN ('Filter','Filter Guide','Escalation','Active Link','Set Field')"
+            if filter_log_only:
+                workflow_filter += "LOWER(filename) LIKE 'arfilter%' OR event_type IN ('Filter','Filter Guide','Set Field')"
+            else:
+                workflow_filter += "LOWER(filename) LIKE 'arfilter%' OR LOWER(filename) LIKE 'aresc%' OR LOWER(filename) LIKE '%escalation%' "
+                workflow_filter += "OR LOWER(filename) LIKE '%active%link%' OR LOWER(filename) LIKE '%active_link%' OR LOWER(filename) LIKE '%progressive%' "
+                workflow_filter += "OR event_type IN ('Filter','Filter Guide','Escalation','Active Link','Set Field')"
             workflow_filter += ")"
             event_filter = f"({event_filter} AND {workflow_filter})"
         conn = self._connect(target)

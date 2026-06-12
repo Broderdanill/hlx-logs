@@ -6,7 +6,7 @@ The result interface provides a log-analysis view and a visual flow view while s
 
 ## Current version
 
-**0.0.30**
+**0.0.58**
 
 ## Run with Podman
 
@@ -135,6 +135,24 @@ security:
   admin_group_id: "1"
 ```
 
+## AR log control
+
+The collect page includes **Enable all logs** and **Disable all logs** buttons. These submit to the BMC display/service form `AR System Server Group Log Management`, following the same service-form workflow pattern used by BMC's bundled `AR System Server Group Log:SetLogs` active link.
+
+The same action is available as REST from this app:
+
+```bash
+curl -X POST http://localhost:8095/api/log-control/all \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"enable"}'
+
+curl -X POST http://localhost:8095/api/log-control/all \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"disable"}'
+```
+
+The call uses the signed-in user's AR-JWT and requires the normal app session/authentication.
+
 ## Log categorization
 
 Discovered log files are automatically categorized from their filenames and displayed with category/tags in the collect and discovery screens. The classifier supports combined logs such as `ardebug.log`, which can contain API, Filter, SQL, Escalation and User trace output when those AR Server log options are enabled.
@@ -142,6 +160,178 @@ Discovered log files are automatically categorized from their filenames and disp
 See `docs/log-categories.md` for the current category rules.
 
 ## Version history
+
+### 0.0.58
+- Polished the Jira-inspired dark theme with calmer hover/active states for buttons, inputs and top navigation.
+- Fixed top-left brand alignment and spacing around the app icon/version.
+- Added a little more breathing room to compact panels, rows and Log settings without returning to the old bulky layout.
+- Improved disabled/read-only visual treatment for inactive Log settings filename and user-restriction fields.
+
+### 0.0.57
+- Compact one-row Collect toolbar: search, Hide 0 KB, template and Fetch stay together.
+- Inactive Log settings filename fields are read-only/disabled until the log type is enabled.
+- Restrict-Log-Users text field is disabled when the restriction toggle is off.
+- Jira-inspired dark theme trial: neutral dark surfaces, blue accent, lower cyan intensity and tighter spacing.
+
+### 0.0.56
+- Replaced Log settings checkboxes with compact boolean-style switches.
+- Removed the Back to collect button from Log settings.
+- Added subtle icons to the top navigation links.
+- Added a Hide 0 KB filter beside the log search field on Collect.
+- Improved Log settings spacing and switch alignment.
+- Improved Discovery scrolling and compact table styling.
+
+### 0.0.55
+- Removed the top navigation Upload link; uploads are now available from the Collect page as a second create-collection tab.
+- Collect page now offers two creation modes: Fetch from AR (default) and Upload / paste logs.
+- Cleaned up the Log settings layout into clearer grouped controls for base pod, target pods, template/save, restrict users, and log rows.
+- Improved Discovery page scrolling and compact table styling so long discovered log lists remain accessible and more consistent with the Collect page.
+
+### 0.0.54
+- Fixed filename setting updates by using the secondary row id from the join entry id before falling back to the configuration GUID.
+- Physical configuration row lookup no longer requests guessed value-field aliases that can make AR reject the query.
+- Added `Restrict-Log-Users` support in Log settings with checkbox plus semicolon-separated user field.
+- When Restrict-Log-Users is unchecked, the app attempts to delete that setting row for selected target pods.
+
+### 0.0.53
+- Filename settings are now saved only for enabled log types.
+- Filename settings are only posted when the value changed from the value loaded in the UI.
+- Prevents Save from re-writing every known `*-Log-File` setting and avoids errors for inactive/missing settings such as `DSO-Log-File`.
+
+### 0.0.52
+
+- Log settings can now save filename settings for AR server logs.
+- Added filename setting mappings such as API-Log-File, Filter-Log-File, SQL-Log-File, Thread-Log-File, Alert-Log-File and related supported log types.
+- Save log settings now writes Debug-mode plus non-empty filename fields for every selected target pod.
+- Log settings loads current filename values from the selected/base pod when available.
+
+### 0.0.51
+- Improved Log settings target pod checkbox layout.
+- Save log settings now shows the global loading overlay while REST updates run.
+- Discovery page layout adjusted to avoid horizontal scrolling and keep columns readable.
+
+### 0.0.50
+- Improved AR log settings Debug-mode save for environments where the physical `AR System Configuration Setting` form rejects numeric field-id updates.
+- Tries physical value field aliases such as `Value` before falling back to numeric field id `3205`.
+- Reads the physical row to discover REST-exposed value field names where available.
+- Keeps verification after save; success is only reported when the join view reads back the requested Debug-mode value.
+
+### 0.0.49
+- Fixed AR log settings Debug-mode update for physical AR System Configuration Setting form.
+- Uses numeric field id 3205 for Setting Value when writing the underlying configuration row.
+- Queries the physical configuration row by numeric field id 179 instead of join-form field labels.
+- Keeps verification after save; success is only reported when the join view reads back the requested Debug-mode value.
+
+### 0.0.48
+- Changed Log settings Debug-mode save to update the underlying `AR System Configuration Setting` row first.
+- Reads through `AR System Configuration Component Setting`, but writes the secondary configuration setting row because that form is a join form.
+- Verifies the value by re-reading after every save before reporting success.
+- Reports a warning if AR accepts the request but the visible Debug-mode value did not actually change.
+
+### 0.0.47
+- Fixed Debug-mode save failures where direct PUT on `AR System Configuration Component Setting` can return database-column errors such as `column t25.e3 does not exist`.
+- Log settings now first tries normal AR REST PUT, then falls back to AR REST `mergeEntry` with the Debug-mode qualification.
+- PUT payload now includes `Setting Name`, `Component Type`, and `Component Name` together with `Setting Value` so AR workflow has the row context.
+
+### 0.0.46
+
+- Fixed Log settings crash caused by reading `PodConfig.name`; discovered/static pods use `PodConfig.id`.
+- Log settings now supports selecting multiple target pods.
+- Save log settings writes the selected Debug-mode bitmask once per selected pod/server.
+- Added a target-pod panel showing each pod's current Debug-mode value or read error.
+- Templates still update the log-type checkboxes; filename fields remain visible but are not written yet.
+
+### 0.0.45
+
+- Added functional Log settings save for AR Server Debug-mode bitmask.
+- Log settings now reads and writes `Setting Value` on `AR System Configuration Component Setting` where `Setting Name = Debug-mode`, `Component Type = com.bmc.arsys.server`, and `Component Name = selected pod/server`.
+- Added server/pod selector and current Debug-mode value display.
+- Added templates such as Filter, Workflow trace, SQL + Filter, API, Performance / SQL, Server diagnostics, and All supported debug logs.
+- Kept filename fields visible for the next implementation step, but they are not written yet.
+
+
+### 0.0.44
+
+- Fixed the Log settings page so the common Save log settings button is visible.
+- Kept Log settings separated from Collect, which only lists available log files to fetch.
+- Added a sticky settings help/action bar so the save action stays easy to find.
+
+
+### 0.0.43
+
+- Restored separation between Collect logs and AR log settings.
+- Collect logs now only lists already-discovered/fetchable log files with filename and size columns.
+- Added a separate Log settings page for toggling AR log types and editing their future log filenames.
+- Save log settings now posts changed log-setting rows from that separate page instead of mixing settings into the fetch list.
+
+### 0.0.42
+
+- Replaced per-row AR log-control Save buttons with one Save log settings button.
+- The Collect page now posts the complete current toggle/filename state for all known AR log types.
+- Rows with changed log-control fields are marked subtly until saved.
+- Kept backward-compatible handling for the 0.0.41 single-row submit format.
+
+### 0.0.41
+
+- Replaced broad all-logs controls on the collect page with per-log controls.
+- Each known AR log type can now be toggled on/off individually and saved with a filename.
+- Added `POST /logs/control/save` for the UI, using `AR System Server Group Log Management` fields for the selected log type.
+- Collect page keeps file size as a dedicated column and adds filename/toggle/save controls per log row.
+- The old all-logs REST endpoint is still present for API compatibility, but the UI now uses individual log saves.
+
+### 0.0.40
+
+- Added AR REST log-control actions from the collect page: Enable all logs and Disable all logs.
+- Added REST endpoint `POST /api/log-control/all` with JSON body `{"action":"enable"}` or `{"action":"disable"}`.
+- The log-control call mirrors the BMC `AR System Server Group Log Management` service workflow from the imported definition.
+- Log file size is now shown as its own column on the collect page instead of being embedded in the description text.
+
+### 0.0.39
+
+- Reworked focused filter transaction visualization after deeper AR filter-log analysis.
+- The diagram is now grouped by AR filter-processing frames instead of drawing one large node network.
+- Top-to-bottom order follows the selected AR `TrID` from the filter log.
+- Each frame shows input operation, executed IF/ELSE filters, key actions/outputs, and hidden skipped checks.
+- Plain failed qualifications are hidden when requested, while `Failed qualification -- perform else actions` is treated as an executed ELSE branch.
+- Repeated filter-guide/service executions are shown as repeated frames in the same AR transaction trace.
+
+### 0.0.38
+
+- Fixed Mermaid zoom buttons in the focused filter transaction flow.
+- Removed the general log filter bar from the focused visual flow view.
+- Visual flow now shows a transaction-focused heading with selected AR TrID and detected user when available.
+- Flow generation ignores unrelated table filters so the selected transaction does not become incomplete after navigating back and forth.
+
+### 0.0.37
+
+- Reworked Filter transaction flow to build a compact Mermaid flowchart from rows sharing the selected AR filter TrID.
+- The flow now connects filter checks/actions by the AR log transaction id instead of drawing a huge participant-heavy sequence diagram.
+- Reduced Mermaid parser failures by sanitizing node labels and limiting low-level repeated GET/SET/API rows to summary nodes.
+
+### 0.0.34
+
+- Fixed delayed loading overlay so it does not stay visible when returning to already-rendered views.
+- Reworked focused filter transaction Mermaid generation to summarize workflow actions instead of rendering huge raw-row diagrams.
+- Added Mermaid `maxTextSize` configuration for larger local diagrams.
+
+### 0.0.33
+
+- Compact filter transaction flow generation.
+- Discovery layout fix.
+
+
+### 0.0.32
+
+- Fixed an Internal Server Error in the results view caused by an undefined `tx` variable in SQLite row filtering.
+- Transaction-focused filtering now works consistently for both Log view and focused Visual Flow.
+
+### 0.0.31
+
+- Visual Flow is no longer a general result tab; it is opened from a clickable Transaction ID in Log view.
+- Focused flow currently targets `arfilter` rows with a matching `TrID`, so the diagram represents one server-side filter transaction instead of a broad mixed workflow overview.
+- Log view now shows the Transaction column by default and turns filter-log transaction ids into flow links.
+- Removed the redundant `Collect more` action from the collection/result header.
+- Pressing Enter in the Collect page `Filter logs...` field is ignored so it no longer accidentally submits the fetch form.
 
 ### 0.0.30
 
@@ -340,3 +530,9 @@ See `docs/log-categories.md` for the current category rules.
 - Login through AR REST JWT.
 - POST log requests to `HLX:Logs`.
 - Download attachments.
+
+### 0.0.60
+- Reworked Log settings switches and rows for a finished, Jira-like layout.
+- Applied a broad pixel-polish pass to tables, upload forms, collections, result views, discovery and Mermaid visuals.
+- Fixed floating/sticky table headers so rows do not visibly bleed above headers during scroll.
+- Kept the new genie icon and aligned it consistently across app, favicon and loading/progress UI.

@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from .ar_client import ArClient, ArRestError, _entry_id_from_links
+from .ar_client import ArClient, ArRestError, _entry_id_from_links, LOG_CONTROL_DEFINITIONS, LOG_SETTING_TEMPLATES, log_control_key_for_filename
 from .logging_config import configure_logging
 from .parser import LogLine
 from .log_analysis import rows_from_downloads, filter_rows, summarize_facets, build_flow, build_flow_from_dicts, build_mermaid_swimlane, workflow_event_kind, WORKFLOW_TYPE_ORDER, WORKFLOW_TYPE_LABELS
@@ -37,7 +37,7 @@ runtime_config = RuntimeConfig(config)
 store = CollectionStore(config.storage)
 store.cleanup()
 
-APP_VERSION = "0.0.30"
+APP_VERSION = "0.0.60"
 
 app = FastAPI(title="hlx-logs", version=APP_VERSION)
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-only-change-me"), same_site="lax")
@@ -292,6 +292,258 @@ async def index(request: Request):
             "discovery_status": runtime_config.discovery_status(),
         },
     )
+
+
+@app.get("/log-settings", response_class=HTMLResponse)
+async def log_settings(request: Request, server: str = ""):
+    """Separate AR server log-control page.
+
+    Log settings controls future AR Server logging by updating the Debug-mode
+    bitmask in AR System Configuration Component Setting. Collect only lists log
+    files that already exist and can be fetched.
+    """
+    jwt = require_jwt(request)
+    try:
+        await refresh_available_logs(jwt)
+    except Exception:
+        logger.debug("Could not refresh discovery before Log settings", exc_info=True)
+    cfg = runtime_config.get()
+    server_names = sorted([p.id for p in cfg.pods if getattr(p, "enabled", True)], key=str.lower)
+    selected_server = (server or "").strip() or (server_names[0] if server_names else "")
+    if selected_server not in server_names and server_names:
+        selected_server = server_names[0]
+    current_debug_mode = 0
+    debug_modes_by_server: dict[str, int | None] = {}
+    current_filenames_by_key: dict[str, str] = {}
+    restrict_log_users_enabled = False
+    restrict_log_users = ""
+    read_errors_by_server: dict[str, str] = {}
+    read_error = ""
+    if server_names:
+        client = ArClient(cfg.ar, jwt)
+        try:
+            for server_name in server_names:
+                try:
+                    current = await client.get_server_debug_mode(server_name=server_name)
+                    value = int(current.get("value", 0))
+                    debug_modes_by_server[server_name] = value
+                    if server_name == selected_server:
+                        current_debug_mode = value
+                except Exception as exc:
+                    logger.warning("Could not read Debug-mode for %s: %s", server_name, exc, exc_info=True)
+                    debug_modes_by_server[server_name] = None
+                    read_errors_by_server[server_name] = str(exc)[:250]
+            # Filename setting values are loaded from the selected/base server.
+            # Save applies the currently shown values to all selected target pods.
+            if selected_server:
+                for key, definition in LOG_CONTROL_DEFINITIONS.items():
+                    setting_name = str(definition.get("filename_setting") or "").strip()
+                    if not setting_name:
+                        continue
+                    try:
+                        row = await client.get_server_config_setting(server_name=selected_server, setting_name=setting_name)
+                        filename = str(row.get("raw") or "").strip()
+                        if filename:
+                            current_filenames_by_key[key] = filename
+                    except Exception as exc:
+                        logger.debug("Could not read filename setting %s for %s: %s", setting_name, selected_server, exc, exc_info=True)
+            if selected_server:
+                try:
+                    restrict_row = await client.get_server_config_setting(server_name=selected_server, setting_name="Restrict-Log-Users")
+                    restrict_log_users = str(restrict_row.get("raw") or "").strip()
+                    restrict_log_users_enabled = bool(restrict_log_users)
+                except Exception as exc:
+                    logger.debug("Could not read Restrict-Log-Users for %s: %s", selected_server, exc, exc_info=True)
+            if read_errors_by_server:
+                read_error = "; ".join(f"{name}: {msg}" for name, msg in read_errors_by_server.items())[:500]
+        finally:
+            await client.close()
+    definitions = []
+    for key, value in sorted(LOG_CONTROL_DEFINITIONS.items(), key=lambda item: int(item[1].get("bit_value", 0))):
+        bit_value = int(value.get("bit_value", 0))
+        definitions.append({
+            "key": key,
+            **value,
+            "enabled": bool(current_debug_mode & bit_value),
+            "filename": current_filenames_by_key.get(key) or value.get("default_filename", ""),
+        })
+    return templates.TemplateResponse(
+        "log_settings.html",
+        {
+            **base_context(request),
+            "ar": cfg.ar,
+            "server_names": server_names,
+            "selected_server": selected_server,
+            "current_debug_mode": current_debug_mode,
+            "debug_modes_by_server": debug_modes_by_server,
+            "read_errors_by_server": read_errors_by_server,
+            "log_setting_templates": LOG_SETTING_TEMPLATES,
+            "log_control_definitions": definitions,
+            "log_control_status": request.query_params.get("log_control", ""),
+            "log_control_error": request.query_params.get("log_control_error", "") or read_error,
+            "restrict_log_users_enabled": restrict_log_users_enabled,
+            "restrict_log_users": restrict_log_users,
+        },
+    )
+
+
+@app.post("/logs/control/save")
+async def save_single_log_control(request: Request):
+    """Save AR Debug-mode bitmask and log filename settings for target pods."""
+    jwt = require_jwt(request)
+    form = await request.form()
+    selected_servers = [str(v).strip() for v in form.getlist("server_names") if str(v).strip()]
+    # Backward compatibility with older single-server form posts.
+    if not selected_servers:
+        server_name = str(form.get("server_name", "")).strip()
+        if server_name:
+            selected_servers = [server_name]
+    enabled_keys = [str(v).strip().lower() for v in form.getlist("log_keys") if str(v).strip()]
+    if not selected_servers:
+        return RedirectResponse("/log-settings?log_control_error=No%20server%20or%20pod%20was%20selected", status_code=303)
+
+    debug_mode = 0
+    unknown: list[str] = []
+    for key in enabled_keys:
+        definition = LOG_CONTROL_DEFINITIONS.get(key)
+        if not definition:
+            unknown.append(key)
+            continue
+        debug_mode |= int(definition.get("bit_value", 0))
+
+    filename_updates: dict[str, str] = {}
+    for key in enabled_keys:
+        definition = LOG_CONTROL_DEFINITIONS.get(key)
+        if not definition:
+            continue
+        setting_name = str(definition.get("filename_setting") or "").strip()
+        if not setting_name:
+            continue
+        filename = str(form.get(f"filename_{key}", "")).strip()
+        original_filename = str(form.get(f"original_filename_{key}", "")).strip()
+        # Filename settings are only saved for log types that are enabled.
+        # They are also only posted when the displayed value changed, so Save
+        # does not re-write every known filename setting on every submit.
+        # Empty filename values are skipped so a blank UI field cannot
+        # accidentally wipe an AR server setting.
+        if filename and filename != original_filename:
+            filename_updates[key] = filename
+
+    restrict_users_enabled = str(form.get("restrict_log_users_enabled", "")).lower() in {"on", "true", "1", "yes"}
+    restrict_users_value = str(form.get("restrict_log_users", "")).strip()
+    original_restrict_users_value = str(form.get("original_restrict_log_users", "")).strip()
+    restrict_changed = (restrict_users_enabled and restrict_users_value != original_restrict_users_value) or ((not restrict_users_enabled) and bool(original_restrict_users_value))
+
+    from urllib.parse import quote_plus
+    first_server = selected_servers[0]
+    if unknown:
+        return RedirectResponse(f"/log-settings?server={quote_plus(first_server)}&log_control_error={quote_plus('Unknown log setting(s): ' + ', '.join(unknown))}", status_code=303)
+
+    cfg = runtime_config.get()
+    client = ArClient(cfg.ar, jwt)
+    results: list[dict] = []
+    filename_results: list[dict] = []
+    restrict_results: list[dict] = []
+    errors: list[str] = []
+    try:
+        for server_name in selected_servers:
+            try:
+                result = await client.set_server_debug_mode(server_name=server_name, debug_mode=debug_mode)
+                results.append(result)
+            except Exception as exc:
+                logger.warning("Failed to save AR Debug-mode for %s: %s", server_name, exc, exc_info=True)
+                errors.append(f"{server_name}: Debug-mode: {str(exc)[:220]}")
+                # Continue with filename settings for this server; they are
+                # independent AR setting rows and may still be useful.
+            for key, filename in filename_updates.items():
+                definition = LOG_CONTROL_DEFINITIONS.get(key) or {}
+                setting_name = str(definition.get("filename_setting") or "").strip()
+                if not setting_name:
+                    continue
+                try:
+                    filename_results.append(
+                        await client.set_server_config_setting_value(
+                            server_name=server_name,
+                            setting_name=setting_name,
+                            setting_value=filename,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to save AR filename setting %s for %s: %s", setting_name, server_name, exc, exc_info=True)
+                    errors.append(f"{server_name}: {setting_name}: {str(exc)[:180]}")
+            if restrict_changed:
+                try:
+                    if restrict_users_enabled and restrict_users_value:
+                        restrict_results.append(
+                            await client.upsert_server_config_setting_value(
+                                server_name=server_name,
+                                setting_name="Restrict-Log-Users",
+                                setting_value=restrict_users_value,
+                            )
+                        )
+                    else:
+                        restrict_results.append(
+                            await client.delete_server_config_setting(
+                                server_name=server_name,
+                                setting_name="Restrict-Log-Users",
+                            )
+                        )
+                except Exception as exc:
+                    logger.warning("Failed to save Restrict-Log-Users for %s: %s", server_name, exc, exc_info=True)
+                    errors.append(f"{server_name}: Restrict-Log-Users: {str(exc)[:180]}")
+    finally:
+        await client.close()
+
+    if errors:
+        ok_bits = f" Saved Debug-mode for {len(results)} server(s)." if results else ""
+        ok_files = f" Saved {len(filename_results)} changed filename setting(s)." if filename_results else ""
+        ok_restrict = f" Saved Restrict-Log-Users for {len(restrict_results)} server(s)." if restrict_results else ""
+        return RedirectResponse(f"/log-settings?server={quote_plus(first_server)}&log_control_error={quote_plus(ok_bits + ok_files + ok_restrict + ' Failed: ' + '; '.join(errors))}", status_code=303)
+
+    changed = ", ".join(f"{r['server_name']} {r['old_value']} -> {r['new_value']}" for r in results)
+    filename_msg = f" Saved {len(filename_results)} changed filename setting(s)." if filename_results else ""
+    restrict_msg = f" Saved Restrict-Log-Users for {len(restrict_results)} server(s)." if restrict_results else ""
+    msg = f"saved Debug-mode {debug_mode} for {len(results)} server(s): {changed}.{filename_msg}{restrict_msg}"
+    return RedirectResponse(f"/log-settings?server={quote_plus(first_server)}&log_control={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/logs/toggle-all")
+async def toggle_all_logs(request: Request, action: str = Form(...)):
+    jwt = require_jwt(request)
+    action_normalized = action.strip().lower()
+    if action_normalized not in {"enable", "disable"}:
+        return RedirectResponse("/?log_control_error=Invalid%20log%20control%20action", status_code=303)
+    cfg = runtime_config.get()
+    client = ArClient(cfg.ar, jwt)
+    try:
+        await client.set_all_server_logs(enable=(action_normalized == "enable"))
+    except Exception as exc:
+        logger.warning("Failed to %s all AR logs: %s", action_normalized, exc, exc_info=True)
+        from urllib.parse import quote_plus
+        return RedirectResponse(f"/?log_control_error={quote_plus(str(exc)[:500])}", status_code=303)
+    finally:
+        await client.close()
+    return RedirectResponse(f"/?log_control={action_normalized}", status_code=303)
+
+
+@app.post("/api/log-control/all")
+async def api_toggle_all_logs(request: Request):
+    jwt = require_jwt(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    action_normalized = str(payload.get("action", "")).strip().lower()
+    if action_normalized not in {"enable", "disable", "on", "off"}:
+        raise HTTPException(status_code=400, detail="Use JSON body {\"action\": \"enable\"} or {\"action\": \"disable\"}.")
+    enable = action_normalized in {"enable", "on"}
+    cfg = runtime_config.get()
+    client = ArClient(cfg.ar, jwt)
+    try:
+        result = await client.set_all_server_logs(enable=enable)
+    finally:
+        await client.close()
+    return {"ok": True, "action": "enable" if enable else "disable", "result": result}
 
 
 @app.get("/collections", response_class=HTMLResponse)
@@ -693,6 +945,7 @@ async def results(request: Request, transaction_id: str):
     file_name = params.get("file", "")
     level = params.get("level", "")
     ignore_failed = params.get("ignore_failed") in {"1", "true", "on", "yes"}
+    flow_tx = params.get("tx", "")
     raw_wf_types = params.get("wf_types", "")
     if raw_wf_types == "none":
         selected_workflow_types = []
@@ -707,10 +960,10 @@ async def results(request: Request, transaction_id: str):
     allowed_columns = [
         "time", "level", "user", "form", "event", "pod_file", "transaction", "workflow", "field", "message"
     ]
-    raw_cols = params.get("cols", "time,message")
+    raw_cols = params.get("cols", "time,transaction,message")
     selected_columns = [c for c in raw_cols.split(",") if c in allowed_columns]
     if not selected_columns:
-        selected_columns = ["time", "message"]
+        selected_columns = ["time", "transaction", "message"]
 
     facets = store.query_facets(transaction_id, owner=None) or {"users": [], "forms": [], "files": [], "levels": [], "transactions": [], "event_types": []}
     query = store.query_rows(
@@ -724,25 +977,40 @@ async def results(request: Request, transaction_id: str):
         file=file_name,
         level=level,
         ignore_failed=ignore_failed,
+        tx=flow_tx,
         limit=limit,
     ) or {"total": int(meta.get("row_count") or 0), "filtered": 0, "rows": []}
-    flow_source = store.query_flow_rows(
-        transaction_id,
-        owner=None,
-        q=q,
-        user=user,
-        form=form_name,
-        start=start,
-        end=end,
-        file=file_name,
-        level=level,
-        ignore_failed=ignore_failed,
-        limit=600,
-        workflow_only=True,
-    ) or []
-    flow = build_flow_from_dicts(flow_source, limit=240)
-    flow = [event for event in flow if workflow_event_kind(event) in selected_workflow_types]
-    mermaid_code = build_mermaid_swimlane(flow, limit=80)
+    flow = []
+    flow_source = []
+    visual_user = ""
+    mermaid_code = "flowchart TD\n  Hint[Open Log view and click a filter TrID]"
+    if active_tab == "visual" and flow_tx:
+        # Visual flow is intentionally scoped only by the chosen AR filter TrID.
+        # The log-table filters are not applied here, otherwise the workflow can
+        # become incomplete or misleading after navigating back from filtered views.
+        flow_source = store.query_flow_rows(
+            transaction_id,
+            owner=None,
+            q="",
+            user="",
+            form="",
+            start="",
+            end="",
+            file="",
+            level="",
+            ignore_failed=False,
+            tx=flow_tx,
+            limit=900,
+            workflow_only=True,
+            filter_log_only=True,
+        ) or []
+        for item in flow_source:
+            candidate = str(item.get("user") or "").strip()
+            if candidate:
+                visual_user = candidate
+                break
+        flow = build_flow_from_dicts(flow_source, limit=420)
+        mermaid_code = build_mermaid_swimlane(flow, limit=180, hide_not_triggered=ignore_failed)
 
     return templates.TemplateResponse(
         "results.html",
@@ -756,8 +1024,10 @@ async def results(request: Request, transaction_id: str):
             "facets": facets,
             "flow": flow,
             "mermaid_code": mermaid_code,
+            "visual_user": visual_user,
+            "visual_row_count": len(flow_source),
             "active_tab": active_tab,
-            "filters": {"q": q, "user": user, "form": form_name, "start": start, "end": end, "file": file_name, "level": level, "limit": limit, "ignore_failed": ignore_failed, "wf_types": ",".join(selected_workflow_types)},
+            "filters": {"q": q, "user": user, "form": form_name, "start": start, "end": end, "file": file_name, "level": level, "limit": limit, "ignore_failed": ignore_failed, "wf_types": ",".join(selected_workflow_types), "tx": flow_tx},
             "workflow_type_order": WORKFLOW_TYPE_ORDER,
             "workflow_type_labels": WORKFLOW_TYPE_LABELS,
             "selected_workflow_types": selected_workflow_types,
