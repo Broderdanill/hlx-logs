@@ -201,7 +201,13 @@
       <form method="get" action="/results/{{ result.transaction_id }}" class="visual-mini-filter" data-no-loading="true">
         <input type="hidden" name="tab" value="visual">
         <input type="hidden" name="tx" value="{{ filters.tx }}">
-        <label class="inline-check visual-triggered-only"><input type="checkbox" name="ignore_failed" value="1" onchange="this.form.submit()" {% if filters.ignore_failed %}checked{% endif %}> Hide failed / not-triggered branches</label>
+        <label class="inline-check visual-triggered-only">
+          <span class="switch switch-sm" aria-hidden="true">
+            <input type="checkbox" name="ignore_failed" value="1" onchange="this.form.submit()" {% if filters.ignore_failed %}checked{% endif %}>
+            <span class="switch-track"></span>
+          </span>
+          <span>Hide failed / not-triggered branches</span>
+        </label>
       </form>
       {% endif %}
       <div class="mermaid-scroll dark-mermaid-scroll">

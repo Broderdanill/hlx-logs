@@ -199,16 +199,16 @@
     if (reset) reset.textContent = Math.round(mermaidZoom * 100) + '%';
   };
   const actorPalette = {
-    client: {fill: '#063b52', stroke: '#00b9f6', text: '#e9fbff'},
-    active_link: {fill: '#0b3a28', stroke: '#49c449', text: '#eaffef'},
-    guide: {fill: '#4a3608', stroke: '#ffcc33', text: '#fff5c2'},
-    filter: {fill: '#0d315b', stroke: '#6ea8ff', text: '#eef6ff'},
-    escalation: {fill: '#32164b', stroke: '#c97aff', text: '#f5e9ff'},
-    service: {fill: '#4a250b', stroke: '#ff9f43', text: '#fff0dd'},
-    error: {fill: '#4a1110', stroke: '#ff4d3f', text: '#ffe2df'},
-    data: {fill: '#073343', stroke: '#2a70ad', text: '#e9fbff'},
-    sql: {fill: '#3b2d08', stroke: '#ffcc33', text: '#fff5c2'},
-    system: {fill: '#1c2b3d', stroke: '#7f93a8', text: '#e8f1fb'},
+    client: {fill: '#172b4d', stroke: '#85b8ff', text: '#f7f8f9'},
+    active_link: {fill: '#1f2b22', stroke: '#6bcf8b', text: '#f7f8f9'},
+    guide: {fill: '#332b12', stroke: '#f5cd47', text: '#fff7d6'},
+    filter: {fill: '#1d2125', stroke: '#85b8ff', text: '#f7f8f9'},
+    escalation: {fill: '#2b2230', stroke: '#c792ea', text: '#f7f8f9'},
+    service: {fill: '#302316', stroke: '#fca700', text: '#fff1dd'},
+    error: {fill: '#3d1f1f', stroke: '#f87168', text: '#fff1f0'},
+    data: {fill: '#1d2125', stroke: '#8fb8ff', text: '#f7f8f9'},
+    sql: {fill: '#332b12', stroke: '#f5cd47', text: '#fff7d6'},
+    system: {fill: '#22272b', stroke: '#7f8c9a', text: '#f4f5f7'},
   };
   const kindFromActorName = (name) => {
     name = String(name || '').toLowerCase();
@@ -242,7 +242,7 @@
   const forceDarkMermaid = () => {
     const svg = el.querySelector('svg');
     if (!svg) return;
-    svg.style.backgroundColor = '#06192b';
+    svg.style.backgroundColor = '#101418';
     let bg = svg.querySelector('rect.hlx-mermaid-bg');
     const vb = svg.getAttribute('viewBox');
     if (!bg && vb) {
@@ -252,7 +252,7 @@
         bg.setAttribute('class', 'hlx-mermaid-bg');
         bg.setAttribute('x', parts[0]); bg.setAttribute('y', parts[1]);
         bg.setAttribute('width', parts[2]); bg.setAttribute('height', parts[3]);
-        bg.setAttribute('fill', '#06192b');
+        bg.setAttribute('fill', '#101418');
         svg.insertBefore(bg, svg.firstChild);
       }
     }
@@ -267,22 +267,22 @@
         maxTextSize: 2000000,
         theme: 'dark',
         themeVariables: {
-          background: '#06192b',
-          mainBkg: '#092943',
-          secondaryColor: '#0e3b65',
-          primaryColor: '#092943',
+          background: '#101418',
+          mainBkg: '#1d2125',
+          secondaryColor: '#22272b',
+          primaryColor: '#1d2125',
           primaryTextColor: '#f7f7f7',
-          primaryBorderColor: '#00b9f6',
-          lineColor: '#00b9f6',
+          primaryBorderColor: '#579dff',
+          lineColor: '#8fb8ff',
           textColor: '#f7f7f7',
-          actorBkg: '#0b263f',
-          actorBorder: '#00b9f6',
+          actorBkg: '#22272b',
+          actorBorder: '#579dff',
           actorTextColor: '#f7f7f7',
           signalColor: '#f7f7f7',
           signalTextColor: '#f7f7f7',
-          noteBkgColor: '#082138',
+          noteBkgColor: '#1d2125',
           noteTextColor: '#f7f7f7',
-          noteBorderColor: '#2a70ad'
+          noteBorderColor: '#46515d'
         },
         sequence: { mirrorActors: true, wrap: true, width: 360, messageAlign: 'left', showSequenceNumbers: false, actorMargin: 90, boxMargin: 12 }
       });
@@ -336,7 +336,7 @@
       forceDarkMermaid();
       const clone = svg.cloneNode(true);
       clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-      clone.style.backgroundColor = '#06192b';
+      clone.style.backgroundColor = '#101418';
       const blob = new Blob([new XMLSerializer().serializeToString(clone)], {type: 'image/svg+xml;charset=utf-8'});
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);

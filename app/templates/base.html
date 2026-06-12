@@ -12,9 +12,9 @@
   <header class="topbar">
     <a class="brand" href="/"><img src="/static/app-icon.png" alt="" class="brand-icon"><span>HLX Logs</span><small>v{{ version }}</small></a>
     <nav>
-      <a href="/" class="nav-link"><span class="nav-ico" aria-hidden="true">↧</span>Collect</a>
-      <a href="/collections" class="nav-link"><span class="nav-ico" aria-hidden="true">▤</span>Collections</a>
-      <a href="/config" class="nav-link"><span class="nav-ico" aria-hidden="true">◌</span>Discovery</a>
+      <a href="/" class="nav-link"><span class="nav-ico" aria-hidden="true">↓</span>Collect</a>
+      <a href="/collections" class="nav-link"><span class="nav-ico" aria-hidden="true">☰</span>Collections</a>
+      <a href="/config" class="nav-link"><span class="nav-ico" aria-hidden="true">◧</span>Discovery</a>
       <a href="/log-settings" class="nav-link"><span class="nav-ico" aria-hidden="true">⚙</span>Log settings</a>
       {% if username %}<span class="signed-in">{{ username }}</span>{% endif %}
       {% if username %}<form method="post" action="/logout" class="inline"><button class="nav-button">Logout</button></form>{% endif %}

@@ -6,7 +6,7 @@ The result interface provides a log-analysis view and a visual flow view while s
 
 ## Current version
 
-**0.0.58**
+**0.0.61**
 
 ## Run with Podman
 
@@ -530,6 +530,10 @@ See `docs/log-categories.md` for the current category rules.
 - Login through AR REST JWT.
 - POST log requests to `HLX:Logs`.
 - Download attachments.
+
+### 0.0.61
+- Refined Jira-like UI details: badge alignment, pod/toggle spacing, button icon consistency, Discovery settings table colors, and Mermaid/visual flow theming.
+- Polished Collections and Upload action buttons to use monochrome UI icons instead of emoji glyphs.
 
 ### 0.0.60
 - Reworked Log settings switches and rows for a finished, Jira-like layout.
