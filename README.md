@@ -6,7 +6,7 @@ The result interface provides a log-analysis view and a visual flow view while s
 
 ## Current version
 
-**0.0.61**
+**0.0.63**
 
 ## Run with Podman
 
@@ -530,6 +530,17 @@ See `docs/log-categories.md` for the current category rules.
 - Login through AR REST JWT.
 - POST log requests to `HLX:Logs`.
 - Download attachments.
+
+### 0.0.63
+- Changed collection flow to download/save log packages first without parsing or indexing.
+- Added explicit Analyze logs action that parses files and builds the SQLite search index on demand.
+- Newly uploaded extra logs mark the collection as pending analysis to avoid showing stale indexed data.
+
+### 0.0.62
+- Converted the Collect log selector into a cleaner table-like grid with separated headers and aligned columns.
+- Added a Jira-dark compatible loading overlay with binary stream animation and the app genie icon.
+- Made Restrict-Log-Users disable/delete idempotent when the setting row is already missing.
+- Continued visual polish for Discovery settings, checkboxes/toggles and Mermaid colors.
 
 ### 0.0.61
 - Refined Jira-like UI details: badge alignment, pod/toggle spacing, button icon consistency, Discovery settings table colors, and Mermaid/visual flow theming.

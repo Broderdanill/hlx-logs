@@ -37,7 +37,7 @@ runtime_config = RuntimeConfig(config)
 store = CollectionStore(config.storage)
 store.cleanup()
 
-APP_VERSION = "0.0.61"
+APP_VERSION = "0.0.63"
 
 app = FastAPI(title="hlx-logs", version=APP_VERSION)
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-only-change-me"), same_site="lax")
@@ -733,19 +733,20 @@ async def _collect_job(transaction_id: str, username: str, jwt: str, pair_dicts:
 
         if not raw_downloads and failures:
             raise ArRestError(f"No logs could be downloaded. {len(failures)} item(s) failed. First error: {failures[0]['error']}")
-        _job_update(transaction_id, message="Analyzing downloaded logs...", step=total, total=total)
-        rows = rows_from_downloads(raw_downloads, request_meta)
-        store.save_collection(transaction_id, username, request_meta, rows, raw_downloads, failures=failures)
+        _job_update(transaction_id, message="Saving downloaded log packages...", step=total, total=total)
+        # Keep collection fast: only persist downloaded files first. Parsing/indexing is
+        # started explicitly from the result page when the user wants analysis.
+        store.save_collection(transaction_id, username, request_meta, [], raw_downloads, failures=failures, analysis_status="pending")
         if failures:
             _job_update(
                 transaction_id,
                 status="complete_with_warnings",
-                message=f"Done with {len(failures)} warning(s)",
+                message=f"Downloaded with {len(failures)} warning(s)",
                 step=total,
-                result_url=f"/results/{transaction_id}",
+                result_url=f"/results/{transaction_id}?tab=downloads",
             )
         else:
-            _job_update(transaction_id, status="complete", message="Done", step=total, result_url=f"/results/{transaction_id}")
+            _job_update(transaction_id, status="complete", message="Downloaded logs", step=total, result_url=f"/results/{transaction_id}?tab=downloads")
     except Exception as exc:
         logger.exception("Collection failed")
         _job_update(transaction_id, status="error", message="Collection failed", error=str(exc))
@@ -873,8 +874,8 @@ async def upload_collection(
 
     if not downloads:
         return templates.TemplateResponse("error.html", {**base_context(request), "message": "No readable files were found in the upload."}, status_code=400)
-    rows = rows_from_downloads(downloads, requests, default_pod=default_pod or "uploaded")
-    store.save_collection(transaction_id, username, requests, rows, downloads, failures=failures)
+    # Store uploads first; analysis/indexing is explicit so creating a collection stays fast.
+    store.save_collection(transaction_id, username, requests, [], downloads, failures=failures, analysis_status="pending")
     meta_path = store.path_for(transaction_id) / "meta.json"
     try:
         import json
@@ -885,7 +886,7 @@ async def upload_collection(
         store._cache.pop(str(store.path_for(transaction_id)), None)
     except Exception:
         logger.debug("Could not patch uploaded collection metadata", exc_info=True)
-    return RedirectResponse(f"/results/{transaction_id}", status_code=303)
+    return RedirectResponse(f"/results/{transaction_id}?tab=downloads", status_code=303)
 
 
 @app.get("/progress/{transaction_id}", response_class=HTMLResponse)
@@ -914,6 +915,51 @@ async def job_status(request: Request, transaction_id: str):
     return JSONResponse(job)
 
 
+@app.post("/results/{transaction_id}/analyze")
+async def analyze_collection(transaction_id: str, request: Request, background_tasks: BackgroundTasks):
+    require_jwt(request)
+    username = request.session.get("username", "unknown")
+    loaded = store.load_collection_meta(transaction_id, owner=None)
+    if not loaded:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    JOBS[transaction_id] = {
+        "transaction_id": transaction_id,
+        "owner": username,
+        "status": "running",
+        "current": 0,
+        "total": max(len(loaded.get("downloads", {})), 1),
+        "message": "Analyzing and indexing log data...",
+    }
+    background_tasks.add_task(_analyze_collection_job, transaction_id, username)
+    return RedirectResponse(f"/progress/{transaction_id}", status_code=303)
+
+
+async def _analyze_collection_job(transaction_id: str, username: str):
+    try:
+        loaded = store.load_collection_meta(transaction_id, owner=None)
+        if not loaded:
+            raise RuntimeError("Collection not found")
+        downloads_paths = loaded.get("downloads", {})
+        total = max(len(downloads_paths), 1)
+        _job_update(transaction_id, status="running", message="Reading downloaded log packages...", step=0, total=total)
+        downloads_bytes: dict[str, bytes] = {}
+        for idx, (name, path) in enumerate(downloads_paths.items(), start=1):
+            if path.exists():
+                _job_update(transaction_id, message=f"Reading {name}", step=idx - 1, total=total)
+                downloads_bytes[name] = path.read_bytes()
+                await asyncio.sleep(0)
+        if not downloads_bytes:
+            raise RuntimeError("No downloaded files were available for analysis")
+        _job_update(transaction_id, message="Parsing log files...", step=total, total=total + 2)
+        rows = rows_from_downloads(downloads_bytes, loaded["meta"].get("requests", []))
+        _job_update(transaction_id, message="Building searchable index...", step=total + 1, total=total + 2)
+        store.reindex_collection(transaction_id, rows, owner=None)
+        _job_update(transaction_id, status="complete", message=f"Analysis ready: {len(rows)} parsed row(s)", step=total + 2, total=total + 2, result_url=f"/results/{transaction_id}?tab=logs")
+    except Exception as exc:
+        logger.exception("Analysis failed for %s", transaction_id)
+        _job_update(transaction_id, status="error", message="Analysis failed", error=str(exc))
+
+
 @app.get("/results/{transaction_id}", response_class=HTMLResponse)
 async def results(request: Request, transaction_id: str):
     require_jwt(request)
@@ -922,21 +968,13 @@ async def results(request: Request, transaction_id: str):
     if not loaded:
         return templates.TemplateResponse("error.html", {**base_context(request), "message": "Collection not found. It may have expired based on retention settings."}, status_code=404)
 
-    # Backfill analysis rows for older collections created before indexing or parsing.
     meta = loaded["meta"]
-    if int(meta.get("row_count") or 0) == 0 and loaded.get("downloads"):
-        try:
-            downloads_bytes = {name: path.read_bytes() for name, path in loaded["downloads"].items() if path.exists()}
-            rows = rows_from_downloads(downloads_bytes, meta.get("requests", []))
-            if rows:
-                store.reindex_collection(transaction_id, rows, owner=None)
-                loaded = store.load_collection_meta(transaction_id, owner=None) or loaded
-                meta = loaded["meta"]
-        except Exception:
-            logger.warning("Could not backfill log analysis rows for %s", transaction_id, exc_info=True)
+    analysis_ready = (meta.get("analysis_status") == "ready") or int(meta.get("row_count") or 0) > 0
 
     params = request.query_params
     active_tab = params.get("tab", "logs")
+    if not analysis_ready and active_tab in {"logs", "visual"}:
+        active_tab = "downloads"
     q = params.get("q", "")
     user = params.get("user", "")
     form_name = params.get("form", "")
@@ -965,21 +1003,25 @@ async def results(request: Request, transaction_id: str):
     if not selected_columns:
         selected_columns = ["time", "transaction", "message"]
 
-    facets = store.query_facets(transaction_id, owner=None) or {"users": [], "forms": [], "files": [], "levels": [], "transactions": [], "event_types": []}
-    query = store.query_rows(
-        transaction_id,
-        owner=None,
-        q=q,
-        user=user,
-        form=form_name,
-        start=start,
-        end=end,
-        file=file_name,
-        level=level,
-        ignore_failed=ignore_failed,
-        tx=flow_tx,
-        limit=limit,
-    ) or {"total": int(meta.get("row_count") or 0), "filtered": 0, "rows": []}
+    if analysis_ready:
+        facets = store.query_facets(transaction_id, owner=None) or {"users": [], "forms": [], "files": [], "levels": [], "transactions": [], "event_types": []}
+        query = store.query_rows(
+            transaction_id,
+            owner=None,
+            q=q,
+            user=user,
+            form=form_name,
+            start=start,
+            end=end,
+            file=file_name,
+            level=level,
+            ignore_failed=ignore_failed,
+            tx=flow_tx,
+            limit=limit,
+        ) or {"total": int(meta.get("row_count") or 0), "filtered": 0, "rows": []}
+    else:
+        facets = {"users": [], "forms": [], "files": [], "levels": [], "transactions": [], "event_types": []}
+        query = {"total": 0, "filtered": 0, "rows": []}
     flow = []
     flow_source = []
     visual_user = ""
@@ -1034,6 +1076,7 @@ async def results(request: Request, transaction_id: str):
             "allowed_columns": allowed_columns,
             "selected_columns": selected_columns,
             "log_type_options": runtime_config.get().log_types,
+            "analysis_ready": analysis_ready,
         },
     )
 
@@ -1089,10 +1132,10 @@ async def upload_extra_logs(
     if not downloads:
         return templates.TemplateResponse("error.html", {**base_context(request), "message": "No readable uploaded or pasted log content was provided."}, status_code=400)
 
-    rows = rows_from_downloads(downloads, requests, default_pod=default_pod or "uploaded")
-    if not store.extend_collection(transaction_id, owner=None, requests=requests, rows=rows, downloads=downloads, failures=failures):
+    # Adding files invalidates any existing index; re-run analysis explicitly afterwards.
+    if not store.extend_collection(transaction_id, owner=None, requests=requests, rows=[], downloads=downloads, failures=failures, reset_analysis=True):
         raise HTTPException(status_code=404, detail="Collection not found")
-    return RedirectResponse(f"/results/{transaction_id}?tab=logs", status_code=303)
+    return RedirectResponse(f"/results/{transaction_id}?tab=downloads", status_code=303)
 
 
 @app.get("/results/{transaction_id}/download/{name}")

@@ -9,7 +9,11 @@
         <code>{{ result.transaction_id }}</code>
         · owner <span class="owner-chip">{{ result.owner or 'unknown' }}</span>
         · {{ result.downloads|length }} downloadable file(s)
-        · {{ total_rows }} parsed row(s)
+        {% if analysis_ready %}
+          · {{ total_rows }} parsed row(s)
+        {% else %}
+          · not analyzed yet
+        {% endif %}
         {% if result.failed_count %} · {{ result.failed_count }} warning(s){% endif %}
       </p>
       <form method="post" action="/collections/{{ result.transaction_id }}/rename" class="rename-collection-form" data-no-loading="true">
@@ -21,6 +25,9 @@
     </div>
     <div class="header-actions">
       <a href="/results/{{ result.transaction_id }}/download-all" class="buttonlike primary"><span class="btn-icon">↓</span> Download all logs</a>
+      <form method="post" action="/results/{{ result.transaction_id }}/analyze" data-loading-message="Analyzing and indexing log data...">
+        <button class="secondary" type="submit"><span class="btn-icon">◎</span> {% if analysis_ready %}Re-analyze logs{% else %}Analyze logs{% endif %}</button>
+      </form>
       <form method="post" action="/collections/{{ result.transaction_id }}/delete" onsubmit="return confirm('Delete this collection?');"><button class="danger-button"><span class="btn-icon">×</span> Delete</button></form>
       <button type="button" class="secondary" data-toggle-upload><span class="btn-icon">↑</span> Upload / paste logs</button>
     </div>
@@ -57,8 +64,12 @@
   </section>
 
   <div class="result-tabs">
-    <a class="tab-link {% if active_tab == 'logs' %}active{% endif %}" href="/results/{{ result.transaction_id }}?tab=logs">Log view</a>
-    {% if active_tab == 'visual' %}<span class="tab-link active">Filter transaction flow</span>{% endif %}
+    {% if analysis_ready %}
+      <a class="tab-link {% if active_tab == 'logs' %}active{% endif %}" href="/results/{{ result.transaction_id }}?tab=logs">Log view</a>
+      {% if active_tab == 'visual' %}<span class="tab-link active">Filter transaction flow</span>{% endif %}
+    {% else %}
+      <span class="tab-link disabled-tab" title="Run analysis before using Log view">Log view</span>
+    {% endif %}
     <a class="tab-link {% if active_tab == 'downloads' %}active{% endif %}" href="/results/{{ result.transaction_id }}?tab=downloads">Downloads</a>
   </div>
 
@@ -250,8 +261,14 @@
       <div>
         <h2>Downloaded log files</h2>
         <p class="muted">Open individual attachment downloads or use Download all logs to receive one flattened zip with the actual log files inside.</p>
+        {% if not analysis_ready %}<p class="muted analysis-pending-note">Analysis has not been run yet. Downloads are ready now; click <strong>Analyze logs</strong> when you want searchable rows and visual flow.</p>{% endif %}
       </div>
-      <a href="/results/{{ result.transaction_id }}/download-all" class="buttonlike primary"><span class="btn-icon">↓</span> Download all logs</a>
+      <div class="header-actions">
+        {% if not analysis_ready %}
+        <form method="post" action="/results/{{ result.transaction_id }}/analyze" data-loading-message="Analyzing and indexing log data..."><button class="secondary" type="submit"><span class="btn-icon">◎</span> Analyze logs</button></form>
+        {% endif %}
+        <a href="/results/{{ result.transaction_id }}/download-all" class="buttonlike primary"><span class="btn-icon">↓</span> Download all logs</a>
+      </div>
     </div>
     <table class="data-table downloads-table">
       <thead><tr><th>File</th><th>Size</th><th>Action</th></tr></thead>

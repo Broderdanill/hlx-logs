@@ -57,7 +57,8 @@ class CollectionStore:
     def path_for(self, transaction_id: str) -> Path:
         return self.collections_dir / safe_name(transaction_id)
 
-    def save_collection(self, transaction_id: str, owner: str, requests: list[dict], rows: list[LogLine], downloads: dict[str, bytes], failures: list[dict] | None = None) -> None:
+    def save_collection(self, transaction_id: str, owner: str, requests: list[dict], rows: list[LogLine] | None, downloads: dict[str, bytes], failures: list[dict] | None = None, *, analysis_status: str | None = None) -> None:
+        rows = list(rows or [])
         target = self.path_for(transaction_id)
         target.mkdir(parents=True, exist_ok=True)
         downloads_dir = target / "downloads"
@@ -81,10 +82,17 @@ class CollectionStore:
             "failures": failures or [],
             "failed_count": len(failures or []),
             "row_count": len(rows),
+            "analysis_status": analysis_status or ("ready" if rows else "pending"),
+            "analyzed_at": utc_now().isoformat() if rows else None,
             "summary": counts,
         }
         (target / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
-        self._write_index(target, rows)
+        if rows:
+            self._write_index(target, rows)
+        else:
+            db_path = self._db_path(target)
+            if db_path.exists():
+                db_path.unlink()
         self._cache.pop(str(target), None)
 
 
@@ -145,7 +153,7 @@ class CollectionStore:
         return loaded
 
 
-    def extend_collection(self, transaction_id: str, *, owner: str | None, requests: list[dict], rows: list[LogLine], downloads: dict[str, bytes], failures: list[dict] | None = None) -> bool:
+    def extend_collection(self, transaction_id: str, *, owner: str | None, requests: list[dict], rows: list[LogLine] | None, downloads: dict[str, bytes], failures: list[dict] | None = None, reset_analysis: bool = False) -> bool:
         loaded = self.load_collection(transaction_id, owner=owner)
         if not loaded:
             return False
@@ -169,17 +177,33 @@ class CollectionStore:
             meta.setdefault("requests", []).extend(requests)
         if failures:
             meta.setdefault("failures", []).extend(failures)
-        all_rows = list(loaded.get("rows", [])) + list(rows)
-        all_rows.sort(key=lambda r: (r.sort_ts, r.pod, r.filename, r.line_number))
-        with (target / "rows.jsonl").open("w", encoding="utf-8") as f:
-            for row in all_rows:
-                f.write(row.to_json() + "\n")
-        meta["row_count"] = len(all_rows)
+        rows = list(rows or [])
+        if reset_analysis or not rows:
+            # New files have been added but not parsed yet. Clear any old analysis
+            # so the UI does not show stale indexed data from before the upload.
+            rows_path = target / "rows.jsonl"
+            rows_path.write_text("", encoding="utf-8")
+            db_path = self._db_path(target)
+            if db_path.exists():
+                db_path.unlink()
+            meta["row_count"] = 0
+            meta["analysis_status"] = "pending"
+            meta.pop("analyzed_at", None)
+            meta["summary"] = {}
+        else:
+            all_rows = list(loaded.get("rows", [])) + rows
+            all_rows.sort(key=lambda r: (r.sort_ts, r.pod, r.filename, r.line_number))
+            with (target / "rows.jsonl").open("w", encoding="utf-8") as f:
+                for row in all_rows:
+                    f.write(row.to_json() + "\n")
+            meta["row_count"] = len(all_rows)
+            meta["analysis_status"] = "ready"
+            meta["analyzed_at"] = utc_now().isoformat()
+            meta["summary"] = self._summarize_rows(all_rows)
+            self._write_index(target, all_rows)
         meta["failed_count"] = len(meta.get("failures", []))
-        meta["summary"] = self._summarize_rows(all_rows)
         meta["updated_at"] = utc_now().isoformat()
         (target / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
-        self._write_index(target, all_rows)
         self._cache.pop(str(target), None)
         return True
 
@@ -194,6 +218,8 @@ class CollectionStore:
             for row in rows:
                 f.write(row.to_json() + "\n")
         meta["row_count"] = len(rows)
+        meta["analysis_status"] = "ready"
+        meta["analyzed_at"] = utc_now().isoformat()
         meta["summary"] = self._summarize_rows(rows)
         meta["updated_at"] = utc_now().isoformat()
         (target / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")

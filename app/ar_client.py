@@ -39,6 +39,23 @@ def _safe_ar_string(value: str) -> str:
     return str(value or "").replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _looks_like_missing_entry_error(message: str) -> bool:
+    """Return True for AR REST messages that mean the requested row is absent."""
+    lowered = str(message or "").lower()
+    needles = (
+        "could not find setting",
+        "no entries",
+        "no entry",
+        "entry does not exist",
+        "does not exist",
+        "not found",
+        'messagenumber":302',
+        "messagenumber:302",
+        "message number 302",
+    )
+    return any(needle in lowered for needle in needles)
+
+
 def _friendly_request_error(exc: httpx.RequestError, base_url: str) -> ArRestError:
     return ArRestError(
         "Could not reach AR REST API at "
@@ -512,7 +529,7 @@ class ArClient:
         try:
             return await self.set_server_config_setting_value(server_name=server_name, setting_name=setting_name, setting_value=setting_value, form_name=form_name)
         except ArRestError as exc:
-            if "Could not find setting" not in str(exc):
+            if not _looks_like_missing_entry_error(str(exc)):
                 raise
         safe_server = _safe_ar_string(server_name)
         safe_setting = _safe_ar_string(setting_name)
@@ -553,17 +570,26 @@ class ArClient:
         }
 
     async def delete_server_config_setting(self, *, server_name: str, setting_name: str, form_name: str = "AR System Configuration Component Setting") -> dict:
-        """Delete a server config setting row from the Component Setting view."""
+        """Delete a server config setting row from the Component Setting view.
+
+        Used for disabling optional settings such as Restrict-Log-Users. Delete
+        is idempotent: if the row is already missing, report a clean no-op.
+        """
         try:
             current = await self.get_server_config_setting(server_name=server_name, setting_name=setting_name, form_name=form_name)
         except ArRestError as exc:
-            if "Could not find setting" in str(exc):
+            if _looks_like_missing_entry_error(str(exc)):
                 return {"server_name": server_name, "setting_name": setting_name, "deleted": False, "status_code": 0, "message": "already absent"}
             raise
         entry_id = current.get("entry_id")
         if not entry_id:
-            raise ArRestError(f"Could not determine entry id for setting {setting_name!r} / server {server_name!r}.")
-        status = await self._delete_entry(form_name=form_name, entry_id=entry_id)
+            return {"server_name": server_name, "setting_name": setting_name, "deleted": False, "status_code": 0, "message": "already absent"}
+        try:
+            status = await self._delete_entry(form_name=form_name, entry_id=entry_id)
+        except ArRestError as exc:
+            if _looks_like_missing_entry_error(str(exc)):
+                return {"server_name": server_name, "setting_name": setting_name, "deleted": False, "status_code": 0, "message": "already absent"}
+            raise
         return {"server_name": server_name, "setting_name": setting_name, "deleted": True, "status_code": status}
 
     async def _put_secondary_server_debug_mode(self, *, server_name: str, debug_mode: int, current: dict, form_name: str) -> dict:
