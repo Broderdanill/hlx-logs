@@ -122,7 +122,6 @@
   }
 })();
 
-// 0.0.55: Home page create-collection tabs.
 (function () {
   const tabs = Array.from(document.querySelectorAll('[data-home-tab]'));
   if (!tabs.length) return;
@@ -143,7 +142,6 @@
   activate('fetch');
 })();
 
-// 0.0.34: delayed loading overlay. It should not remain visible when
 // navigating back/forward from the browser cache or during quick view changes.
 (function () {
   const overlay = document.getElementById('globalLoading');
@@ -184,7 +182,6 @@
   });
 })();
 
-// 0.0.19: Mermaid rendering for visual flow. The source remains visible if the
 // browser cannot load Mermaid from CDN in a locked-down environment.
 (function () {
   const el = document.getElementById('mermaidDiagram');
@@ -379,7 +376,6 @@
   }
 })();
 
-// 0.0.20: top action to reveal upload-to-collection form without taking space in the main result view.
 (function () {
   const button = document.querySelector('[data-toggle-upload]');
   const panel = document.getElementById('uploadMorePanel');
@@ -392,7 +388,6 @@
   });
 })();
 
-// 0.0.24: visible-column picker for log view.
 (function () {
   const hidden = document.getElementById('visibleColumnsInput');
   if (!hidden) return;
@@ -404,7 +399,6 @@
   sync();
 })();
 
-// 0.0.43: save all AR log-control rows from the separate Log settings page.
 (function () {
   const button = document.querySelector('[data-save-log-control-all]');
   const form = document.getElementById('logControlForm');
@@ -455,7 +449,6 @@
   });
 })();
 
-// 0.0.45: Log settings templates for AR Debug-mode bitmask checkboxes.
 (function () {
   const select = document.getElementById('logSettingsTemplate');
   if (!select) return;
@@ -469,7 +462,6 @@
   });
 })();
 
-// 0.0.57: disable settings fields that are not active, for a cleaner Log settings UI.
 (function () {
   const syncRow = (row) => {
     const enabled = row.querySelector('.log-control-enabled');

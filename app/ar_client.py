@@ -94,39 +94,6 @@ LOG_SETTING_TEMPLATES = [
     {"key": "all_core", "label": "All supported debug logs", "logs": ["sql", "filter", "user", "escalation", "api", "thread", "alert", "servergroup", "fts", "archive", "dso", "approval", "plugin"]},
 ]
 
-LOG_CONTROL_BY_FILENAME = {v["default_filename"].lower(): k for k, v in LOG_CONTROL_DEFINITIONS.items()}
-
-def log_control_key_for_filename(filename: str) -> str | None:
-    name = (filename or "").strip().lower()
-    if name in LOG_CONTROL_BY_FILENAME:
-        return LOG_CONTROL_BY_FILENAME[name]
-    if "filter" in name:
-        return "filter"
-    if "sql" in name:
-        return "sql"
-    if "api" in name:
-        return "api"
-    if "escal" in name:
-        return "escalation"
-    if "thread" in name:
-        return "thread"
-    if "user" in name:
-        return "user"
-    if "alert" in name:
-        return "alert"
-    if "plugin" in name and "java" in name:
-        return "javaplugin"
-    if "plugin" in name:
-        return "plugin"
-    if "email" in name or "mail" in name:
-        return "email"
-    if "cmdbservice" in name:
-        return "cmdbservice"
-    if "cmdb" in name:
-        return "cmdb"
-    if "process" in name:
-        return "process"
-    return None
 
 
 class ArClient:
@@ -302,9 +269,9 @@ class ArClient:
         """PUT an entry using numeric AR field IDs as JSON keys.
 
         Some BMC/internal forms do not expose the same field names on the
-        physical schema that the join/display form shows. In those cases AR
-        REST can still accept numeric field IDs, for example 3205 for the
-        Debug-mode Setting Value.
+        physical schema that the join/display form shows. A few environments
+        accept numeric field IDs through REST, so this helper is retained only
+        as a compatibility fallback.
         """
         form = quote(form_name, safe="")
         payload_values = {str(k): v for k, v in values.items()}
@@ -855,142 +822,6 @@ class ArClient:
             "location": response.headers.get("Location") or response.headers.get("location"),
             "body": body,
         }
-
-    async def set_all_server_logs(self, *, enable: bool, form_name: str = "AR System Server Group Log Management") -> dict:
-        """Enable or disable the common AR System server logs via BMC's log-management service form.
-
-        This mirrors the important inputs used by the bundled
-        `AR System Server Group Log:SetLogs` active link. The target form is a
-        display/service form; submitting the entry runs server-side workflow that
-        writes AR System Configuration Component Setting records.
-        """
-        yes_or_none = "Yes" if enable else None
-        true_or_none = "True" if enable else None
-        save = "Save"
-        values = {
-            "SelectMode": "All",
-            "Operation": "Set",
-            "logfileappend": "T",
-            "maxlogfilesize": "0",
-            "maxloginstance": "10",
-            "perthreadlogs": "Yes" if enable else None,
-            # Core AR server logs
-            "API": yes_or_none,
-            "apilogfile": "arapi.log",
-            "SaveApiSetting": save,
-            "Escalation Log": yes_or_none,
-            "escalationlogfile": "aresclator.log",
-            "SaveEscSetting": save,
-            "Filter Log": yes_or_none,
-            "filterlogfile": "arfilter.log",
-            "SaveFilterSetting": save,
-            "SQL": yes_or_none,
-            "sqllogfile": "arsql.log",
-            "SaveSQLSetting": save,
-            "Thread": yes_or_none,
-            "threadlogfile": "arthread.log",
-            "SaveThreadSetting": save,
-            "User Log": yes_or_none,
-            "userlogfile": "aruser.log",
-            "SaveUserSetting": save,
-            "Alert": yes_or_none,
-            "alertlogfile": "aralert.log",
-            "SaveAlertSetting": save,
-            "Full Text Index": yes_or_none,
-            "ftindexerlogfile": "arfts.log",
-            "SaveFTSSetting": save,
-            "Server Group": yes_or_none,
-            "servergrouplogfile": "arservergroup.log",
-            "SaveServerGroupSetting": save,
-            "Archive Log": yes_or_none,
-            "archivelogfile": "ararchive.log",
-            "SaveArchiveSetting": save,
-            "Distributed Server": yes_or_none,
-            "dsologfile": "ardso.log",
-            "DSO Log Level": "1" if enable else None,
-            "SaveDSOSetting": save,
-            # Plug-in / Java plug-in / Approval / Assignment / Email / CMDB / Flashboard / Process
-            "Plug-In Server": yes_or_none,
-            "pluginlogfile": "arplugin.log",
-            "Plugin Log Level:": "INFO" if enable else None,
-            "SavePluginSetting": save,
-            "Arpscf_fld_EnableLogs": true_or_none,
-            "Arpscf_fld_LogFile": "arjavaplugin.log",
-            "Arpscf_fld_LogLevel": "INFO" if enable else None,
-            "SaveJavaPluginSetting": save,
-            "Approval Log": "Approval" if enable else None,
-            "approvallogfile": "arapproval.log",
-            "Approval Log Level:": "1" if enable else None,
-            "SaveApprovalSetting": save,
-            "AE-Log-Enabled": true_or_none,
-            "SaveAssignmentSetting": save,
-            "EmailLog": true_or_none,
-            "EmailEngineLogName": "aremail.log",
-            "EmailLogLevel": "INFO" if enable else None,
-            "SaveEmailSetting": save,
-            "CMDBEngineLog": true_or_none,
-            "CMDBEngineLogName": "arcmdb.log",
-            "CMDBEngineLogLevel": "INFO" if enable else None,
-            "SaveCMDBSetting": save,
-            "CMDBServiceLog": true_or_none,
-            "CMDBServiceLogName": "arcmdbservice.log",
-            "CMDBServiceLogLevel": "INFO" if enable else None,
-            "SaveCMDBServiceLog": save,
-            "FlashboardLog": true_or_none,
-            "Flashboard_LogName": "arflashboard.log",
-            "Flashboard_LogLevel": "INFO" if enable else None,
-            "SaveFlashboardLog": save,
-            "ProcessLog": true_or_none,
-            "ProcessLogName": "arprocess.log",
-            "SaveProcessSetting": save,
-        }
-        # Avoid sending null filename/log-level fields when disabling; AR workflow
-        # only needs the checkbox/save fields to clear the corresponding settings.
-        if not enable:
-            values = {k: v for k, v in values.items() if v is not None or k in {"SelectMode", "Operation"}}
-        result = await self.submit_entry(form_name, values)
-        result["action"] = "enable" if enable else "disable"
-        result["form"] = form_name
-        result["sent_fields"] = sorted(values.keys())
-        return result
-
-    async def set_server_log(self, *, log_key: str, enable: bool, filename: str | None = None, form_name: str = "AR System Server Group Log Management") -> dict:
-        """Enable/disable one AR server log type and optionally set its log filename.
-
-        The values mirror the fields used by BMC's AR System Server Group Log
-        Management display form. One request sends only the selected log type's
-        enable field, filename field and Save*Setting field, so a UI can toggle
-        logs one by one rather than using a broad all-logs operation.
-        """
-        key = (log_key or "").strip().lower()
-        definition = LOG_CONTROL_DEFINITIONS.get(key)
-        if not definition:
-            raise ArRestError(f"Unknown log control key: {log_key}")
-        chosen_filename = (filename or definition.get("default_filename") or "").strip()
-        if definition.get("filename_field") and (chosen_filename.startswith("/") or ":" in chosen_filename or ".." in chosen_filename or chosen_filename.startswith("\\")):
-            raise ArRestError("Log filename must be a relative filename/path, not an absolute path.")
-        values = {
-            "SelectMode": "Selected",
-            "Operation": "Set",
-            "logfileappend": "T",
-            "maxlogfilesize": "0",
-            "maxloginstance": "10",
-            definition["enable_field"]: definition["on_value"] if enable else None,
-            definition["save_field"]: "Save",
-        }
-        if definition.get("filename_field") and chosen_filename:
-            values[definition["filename_field"]] = chosen_filename
-        if enable and definition.get("level_field") and definition.get("level_value"):
-            values[definition["level_field"]] = definition["level_value"]
-        # Keep the disabled value in the payload; many AR display-form workflows
-        # distinguish between a missing field and an explicitly cleared field.
-        result = await self.submit_entry(form_name, values)
-        result["action"] = "enable" if enable else "disable"
-        result["form"] = form_name
-        result["log_key"] = key
-        result["filename"] = chosen_filename
-        result["sent_fields"] = sorted(values.keys())
-        return result
 
     async def create_log_request(self, pod: str, directory: str, filename: str, transaction_id: str) -> str | None:
         form = quote(self.settings.form_name, safe="")

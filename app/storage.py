@@ -116,7 +116,7 @@ class CollectionStore:
             if owner and meta_owner and meta_owner != owner:
                 continue
             if owner and not meta_owner:
-                # Pre-0.0.9 collections had no owner. Keep them visible rather
+                # Older collections may have no owner. Keep them visible rather
                 # than orphaning existing test data.
                 pass
             items.append(meta)

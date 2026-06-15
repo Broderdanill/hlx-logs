@@ -19,10 +19,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from .ar_client import ArClient, ArRestError, _entry_id_from_links, LOG_CONTROL_DEFINITIONS, LOG_SETTING_TEMPLATES, log_control_key_for_filename
+from .ar_client import ArClient, ArRestError, LOG_CONTROL_DEFINITIONS, LOG_SETTING_TEMPLATES
 from .logging_config import configure_logging
 from .parser import LogLine
-from .log_analysis import rows_from_downloads, filter_rows, summarize_facets, build_flow, build_flow_from_dicts, build_mermaid_swimlane, workflow_event_kind, WORKFLOW_TYPE_ORDER, WORKFLOW_TYPE_LABELS
+from .log_analysis import rows_from_downloads, build_flow_from_dicts, build_mermaid_swimlane, WORKFLOW_TYPE_ORDER, WORKFLOW_TYPE_LABELS
 from .runtime_config import RuntimeConfig
 from .settings import load_config, PodConfig, LogTypeConfig
 from .storage import CollectionStore
@@ -37,7 +37,7 @@ runtime_config = RuntimeConfig(config)
 store = CollectionStore(config.storage)
 store.cleanup()
 
-APP_VERSION = "0.0.64"
+APP_VERSION = "1.0.0"
 
 app = FastAPI(title="hlx-logs", version=APP_VERSION)
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-only-change-me"), same_site="lax")
@@ -507,45 +507,6 @@ async def save_single_log_control(request: Request):
     return RedirectResponse(f"/log-settings?server={quote_plus(first_server)}&log_control={quote_plus(msg)}", status_code=303)
 
 
-@app.post("/logs/toggle-all")
-async def toggle_all_logs(request: Request, action: str = Form(...)):
-    jwt = require_jwt(request)
-    action_normalized = action.strip().lower()
-    if action_normalized not in {"enable", "disable"}:
-        return RedirectResponse("/?log_control_error=Invalid%20log%20control%20action", status_code=303)
-    cfg = runtime_config.get()
-    client = ArClient(cfg.ar, jwt)
-    try:
-        await client.set_all_server_logs(enable=(action_normalized == "enable"))
-    except Exception as exc:
-        logger.warning("Failed to %s all AR logs: %s", action_normalized, exc, exc_info=True)
-        from urllib.parse import quote_plus
-        return RedirectResponse(f"/?log_control_error={quote_plus(str(exc)[:500])}", status_code=303)
-    finally:
-        await client.close()
-    return RedirectResponse(f"/?log_control={action_normalized}", status_code=303)
-
-
-@app.post("/api/log-control/all")
-async def api_toggle_all_logs(request: Request):
-    jwt = require_jwt(request)
-    try:
-        payload = await request.json()
-    except Exception:
-        payload = {}
-    action_normalized = str(payload.get("action", "")).strip().lower()
-    if action_normalized not in {"enable", "disable", "on", "off"}:
-        raise HTTPException(status_code=400, detail="Use JSON body {\"action\": \"enable\"} or {\"action\": \"disable\"}.")
-    enable = action_normalized in {"enable", "on"}
-    cfg = runtime_config.get()
-    client = ArClient(cfg.ar, jwt)
-    try:
-        result = await client.set_all_server_logs(enable=enable)
-    finally:
-        await client.close()
-    return {"ok": True, "action": "enable" if enable else "disable", "result": result}
-
-
 @app.get("/collections", response_class=HTMLResponse)
 async def collections_page(request: Request, owner: str = ""):
     require_jwt(request)
@@ -641,8 +602,15 @@ async def _collect_job(transaction_id: str, username: str, jwt: str, pair_dicts:
     request_meta: list[dict] = []
     failures: list[dict] = []
     step = 0
+    step_lock = asyncio.Lock()
     total = max(len(pair_dicts) * 3, 1)
     _job_update(transaction_id, status="running", message="Fetching logs...", step=step, total=total)
+
+    async def advance_progress(increment: int = 1, message: str | None = None) -> None:
+        nonlocal step
+        async with step_lock:
+            step = min(step + increment, total)
+            _job_update(transaction_id, message=message, step=step, total=total)
 
     def add_failure(stage: str, pod_id: str, filename: str, error: Exception | str, directory: str = "", entry_id: str = ""):
         message = str(error)
@@ -657,7 +625,6 @@ async def _collect_job(transaction_id: str, username: str, jwt: str, pair_dicts:
         })
 
     async def process_pair(pod_data: dict, log_data: dict) -> tuple[str, bytes] | None:
-        nonlocal step
         pod_id = pod_data["id"]
         filename = log_data["filename"]
         directory = log_data.get("directory", "")
@@ -670,17 +637,14 @@ async def _collect_job(transaction_id: str, username: str, jwt: str, pair_dicts:
                 request_meta.append(meta)
             except Exception as exc:
                 add_failure("request", pod_id, filename, exc, directory)
-                step += 3
-                _job_update(transaction_id, message=f"Skipped {filename} from {pod_id}: {exc}", step=min(step, total))
+                await advance_progress(3, f"Skipped {filename} from {pod_id}: {exc}")
                 return None
-            step += 1
-            _job_update(transaction_id, step=min(step, total))
+            await advance_progress(1)
 
             entry_id = meta.get("entry_id")
             if not entry_id:
                 add_failure("read", pod_id, filename, "Missing entry id", directory)
-                step += 2
-                _job_update(transaction_id, step=min(step, total))
+                await advance_progress(2)
                 return None
 
             try:
@@ -692,10 +656,8 @@ async def _collect_job(transaction_id: str, username: str, jwt: str, pair_dicts:
                 add_failure("read", pod_id, filename, exc, directory, entry_id)
                 # Continue anyway: the attachment URL only needs the entry id.
                 entry = {"values": {"Pod": pod_id, "Filename": filename, "Directory": directory}, "_hlx_entry_id": entry_id, "_hlx_request_meta": meta}
-            step += 1
-            _job_update(transaction_id, step=min(step, total))
+            await advance_progress(1)
 
-            values = entry.get("values", {})
             # Trust the request metadata first. Some concurrent service-call
             # responses may echo stale/current field values from another request,
             # especially when the same filename is requested from multiple pods.
@@ -715,13 +677,11 @@ async def _collect_job(transaction_id: str, username: str, jwt: str, pair_dicts:
                     await asyncio.sleep(cfg.ar.poll_interval_seconds)
             if blob is None:
                 add_failure("download", pod, filename_for_store, last_error or "Attachment did not become available", directory_for_store, str(entry_id))
-                step += 1
-                _job_update(transaction_id, message=f"Skipped {filename_for_store} from {pod}: attachment unavailable", step=min(step, total))
+                await advance_progress(1, f"Skipped {filename_for_store} from {pod}: attachment unavailable")
                 return None
 
             key = f"{pod}__{filename_for_store}__{entry_id}.zip"
-            step += 1
-            _job_update(transaction_id, step=min(step, total))
+            await advance_progress(1)
             return key, blob
 
     semaphore = asyncio.Semaphore(max(1, int(getattr(cfg.ar, "collect_concurrency", 4))))
