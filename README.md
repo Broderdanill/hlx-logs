@@ -6,7 +6,7 @@ The result interface provides a log-analysis view and a visual flow view while s
 
 ## Current version
 
-**0.0.63**
+**0.0.64**
 
 ## Run with Podman
 
@@ -530,6 +530,10 @@ See `docs/log-categories.md` for the current category rules.
 - Login through AR REST JWT.
 - POST log requests to `HLX:Logs`.
 - Download attachments.
+
+### 0.0.64
+- Fixed start-page log filtering after the table polish by hiding grid rows with explicit priority.
+- Search now matches row text as well as metadata and also works together with Hide 0 KB.
 
 ### 0.0.63
 - Changed collection flow to download/save log packages first without parsing or indexing.

@@ -15,14 +15,27 @@
     }
     return sawZero;
   };
+  const setRowVisible = (row, visible) => {
+    row.classList.toggle('hidden-by-filter', !visible);
+    // Several later visual-polish rules use display:grid!important for the
+    // start-page log table. A normal row.style.display = 'none' is therefore
+    // ignored by the browser, so set the inline priority explicitly.
+    if (visible) {
+      row.style.setProperty('display', 'grid', 'important');
+      row.removeAttribute('aria-hidden');
+    } else {
+      row.style.setProperty('display', 'none', 'important');
+      row.setAttribute('aria-hidden', 'true');
+    }
+  };
   const applyLogFilters = () => {
-    const term = (search?.value || '').toLowerCase();
+    const term = (search?.value || '').trim().toLowerCase();
     const hideZero = !!hideZeroLogs?.checked;
-    document.querySelectorAll('.dense-table[data-filter-area] > [data-search]').forEach((card) => {
-      const haystack = (card.dataset.search || '').toLowerCase();
-      const matchesSearch = haystack.includes(term);
+    document.querySelectorAll('.available-log-table [data-search], .dense-table[data-filter-area] > [data-search]').forEach((card) => {
+      const haystack = `${card.dataset.search || ''} ${card.textContent || ''}`.toLowerCase();
+      const matchesSearch = !term || haystack.includes(term);
       const matchesSize = !hideZero || !rowLooksZeroSize(card);
-      card.style.display = (matchesSearch && matchesSize) ? '' : 'none';
+      setRowVisible(card, matchesSearch && matchesSize);
     });
   };
   if (search) {
@@ -32,6 +45,9 @@
     search.addEventListener('input', applyLogFilters);
   }
   if (hideZeroLogs) hideZeroLogs.addEventListener('change', applyLogFilters);
+  document.addEventListener('DOMContentLoaded', applyLogFilters);
+  window.addEventListener('pageshow', applyLogFilters);
+  applyLogFilters();
 
   const applyPreset = (preset) => {
     const boxes = document.querySelectorAll('input[name="log_type_ids"]');

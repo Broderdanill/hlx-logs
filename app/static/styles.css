@@ -1881,3 +1881,8 @@ input,select,textarea{min-height:36px!important;padding:8px 10px!important;borde
 .downloads-only-panel .section-header-row{align-items:center!important}
 .downloads-only-panel .header-actions{display:flex!important;align-items:center!important;gap:8px!important;flex-wrap:wrap!important}
 .results-pane .compact-titlebar p{display:flex!important;align-items:center!important;gap:6px!important;flex-wrap:wrap!important}
+
+
+/* 0.0.64: robust start-page log filtering with display:grid!important rows */
+.available-log-table [data-search].hidden-by-filter,
+.dense-table[data-filter-area] > [data-search].hidden-by-filter{display:none!important}
