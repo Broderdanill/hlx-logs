@@ -37,7 +37,7 @@ runtime_config = RuntimeConfig(config)
 store = CollectionStore(config.storage)
 store.cleanup()
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.7"
 
 app = FastAPI(title="hlx-logs", version=APP_VERSION)
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-only-change-me"), same_site="lax")
@@ -46,6 +46,13 @@ templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 JOBS: dict[str, dict] = {}
 DISCOVERY_LOCK = asyncio.Lock()
+
+RESTRICT_LOG_USERS_SETTING = "Restrict-Log-Users"
+RESTRICT_LOGGING_SETTING = "Restrict-Logging"
+
+
+def _is_enabled_setting_value(value: str | int | bool | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "on", "yes", "enabled"}
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -317,6 +324,7 @@ async def log_settings(request: Request, server: str = ""):
     current_filenames_by_key: dict[str, str] = {}
     restrict_log_users_enabled = False
     restrict_log_users = ""
+    restrict_logging_missing = False
     read_errors_by_server: dict[str, str] = {}
     read_error = ""
     if server_names:
@@ -349,11 +357,21 @@ async def log_settings(request: Request, server: str = ""):
                         logger.debug("Could not read filename setting %s for %s: %s", setting_name, selected_server, exc, exc_info=True)
             if selected_server:
                 try:
-                    restrict_row = await client.get_server_config_setting(server_name=selected_server, setting_name="Restrict-Log-Users")
+                    restrict_row = await client.get_server_config_setting(server_name=selected_server, setting_name=RESTRICT_LOG_USERS_SETTING)
                     restrict_log_users = str(restrict_row.get("raw") or "").strip()
-                    restrict_log_users_enabled = bool(restrict_log_users)
                 except Exception as exc:
-                    logger.debug("Could not read Restrict-Log-Users for %s: %s", selected_server, exc, exc_info=True)
+                    logger.debug("Could not read %s for %s: %s", RESTRICT_LOG_USERS_SETTING, selected_server, exc, exc_info=True)
+                try:
+                    restrict_logging_row = await client.get_server_config_setting(server_name=selected_server, setting_name=RESTRICT_LOGGING_SETTING)
+                    restrict_log_users_enabled = _is_enabled_setting_value(restrict_logging_row.get("raw"))
+                except Exception as exc:
+                    # Older environments/users may have Restrict-Log-Users but no
+                    # Restrict-Logging row yet. Keep the old display behavior as a
+                    # fallback, but mark it missing so the next Save creates it
+                    # with the currently displayed state.
+                    restrict_log_users_enabled = bool(restrict_log_users)
+                    restrict_logging_missing = True
+                    logger.debug("Could not read %s for %s: %s", RESTRICT_LOGGING_SETTING, selected_server, exc, exc_info=True)
             if read_errors_by_server:
                 read_error = "; ".join(f"{name}: {msg}" for name, msg in read_errors_by_server.items())[:500]
         finally:
@@ -367,7 +385,7 @@ async def log_settings(request: Request, server: str = ""):
             "enabled": bool(current_debug_mode & bit_value),
             "filename": current_filenames_by_key.get(key) or value.get("default_filename", ""),
         })
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         "log_settings.html",
         {
             **base_context(request),
@@ -383,8 +401,12 @@ async def log_settings(request: Request, server: str = ""):
             "log_control_error": request.query_params.get("log_control_error", "") or read_error,
             "restrict_log_users_enabled": restrict_log_users_enabled,
             "restrict_log_users": restrict_log_users,
+            "original_restrict_logging": "1" if restrict_log_users_enabled else "0",
+            "restrict_logging_missing": restrict_logging_missing,
         },
     )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.post("/logs/control/save")
@@ -432,10 +454,17 @@ async def save_single_log_control(request: Request):
     restrict_users_enabled = str(form.get("restrict_log_users_enabled", "")).lower() in {"on", "true", "1", "yes"}
     restrict_users_value = str(form.get("restrict_log_users", "")).strip()
     original_restrict_users_value = str(form.get("original_restrict_log_users", "")).strip()
-    restrict_changed = (restrict_users_enabled and restrict_users_value != original_restrict_users_value) or ((not restrict_users_enabled) and bool(original_restrict_users_value))
+    restrict_logging_value = "1" if restrict_users_enabled else "0"
+    original_restrict_logging_value = "1" if _is_enabled_setting_value(form.get("original_restrict_logging", "0")) else "0"
+    restrict_logging_missing = str(form.get("restrict_logging_missing", "")).lower() in {"on", "true", "1", "yes"}
+    restrict_users_changed = restrict_users_value != original_restrict_users_value
+    restrict_logging_changed = restrict_logging_missing or (restrict_logging_value != original_restrict_logging_value)
+    restrict_changed = restrict_users_changed or restrict_logging_changed
 
     from urllib.parse import quote_plus
     first_server = selected_servers[0]
+    if restrict_users_enabled and not restrict_users_value:
+        return RedirectResponse(f"/log-settings?server={quote_plus(first_server)}&log_control_error={quote_plus('Restrict-Log-Users must be provided when Restrict-Logging is enabled.')}", status_code=303)
     if unknown:
         return RedirectResponse(f"/log-settings?server={quote_plus(first_server)}&log_control_error={quote_plus('Unknown log setting(s): ' + ', '.join(unknown))}", status_code=303)
 
@@ -445,6 +474,16 @@ async def save_single_log_control(request: Request):
     filename_results: list[dict] = []
     restrict_results: list[dict] = []
     errors: list[str] = []
+    touched_setting_names: set[str] = {"Debug-mode"}
+    touched_setting_names.update(
+        str((LOG_CONTROL_DEFINITIONS.get(key) or {}).get("filename_setting") or "").strip()
+        for key in filename_updates
+    )
+    if restrict_changed:
+        touched_setting_names.add(RESTRICT_LOGGING_SETTING)
+        if restrict_users_changed:
+            touched_setting_names.add(RESTRICT_LOG_USERS_SETTING)
+    touched_setting_names = {name for name in touched_setting_names if name}
     try:
         for server_name in selected_servers:
             try:
@@ -472,37 +511,46 @@ async def save_single_log_control(request: Request):
                     logger.warning("Failed to save AR filename setting %s for %s: %s", setting_name, server_name, exc, exc_info=True)
                     errors.append(f"{server_name}: {setting_name}: {str(exc)[:180]}")
             if restrict_changed:
-                try:
-                    if restrict_users_enabled and restrict_users_value:
+                if restrict_users_changed:
+                    try:
                         restrict_results.append(
                             await client.upsert_server_config_setting_value(
                                 server_name=server_name,
-                                setting_name="Restrict-Log-Users",
+                                setting_name=RESTRICT_LOG_USERS_SETTING,
                                 setting_value=restrict_users_value,
                             )
                         )
-                    else:
-                        restrict_results.append(
-                            await client.delete_server_config_setting(
-                                server_name=server_name,
-                                setting_name="Restrict-Log-Users",
-                            )
+                    except Exception as exc:
+                        logger.warning("Failed to save %s for %s: %s", RESTRICT_LOG_USERS_SETTING, server_name, exc, exc_info=True)
+                        errors.append(f"{server_name}: {RESTRICT_LOG_USERS_SETTING}: {str(exc)[:180]}")
+                try:
+                    restrict_results.append(
+                        await client.upsert_server_config_setting_value(
+                            server_name=server_name,
+                            setting_name=RESTRICT_LOGGING_SETTING,
+                            setting_value=restrict_logging_value,
                         )
+                    )
                 except Exception as exc:
-                    logger.warning("Failed to save Restrict-Log-Users for %s: %s", server_name, exc, exc_info=True)
-                    errors.append(f"{server_name}: Restrict-Log-Users: {str(exc)[:180]}")
+                    logger.warning("Failed to save %s=%s for %s: %s", RESTRICT_LOGGING_SETTING, restrict_logging_value, server_name, exc, exc_info=True)
+                    errors.append(f"{server_name}: {RESTRICT_LOGGING_SETTING}: {str(exc)[:180]}")
+        try:
+            await client.verify_component_settings_unblocked(setting_names=touched_setting_names)
+        except Exception as exc:
+            logger.warning("Component Setting block verification failed after save: %s", exc, exc_info=True)
+            errors.append(f"Component setting block verification: {str(exc)[:220]}")
     finally:
         await client.close()
 
     if errors:
         ok_bits = f" Saved Debug-mode for {len(results)} server(s)." if results else ""
         ok_files = f" Saved {len(filename_results)} changed filename setting(s)." if filename_results else ""
-        ok_restrict = f" Saved Restrict-Log-Users for {len(restrict_results)} server(s)." if restrict_results else ""
+        ok_restrict = f" Saved restrict logging setting(s): {len(restrict_results)} update(s)." if restrict_results else ""
         return RedirectResponse(f"/log-settings?server={quote_plus(first_server)}&log_control_error={quote_plus(ok_bits + ok_files + ok_restrict + ' Failed: ' + '; '.join(errors))}", status_code=303)
 
     changed = ", ".join(f"{r['server_name']} {r['old_value']} -> {r['new_value']}" for r in results)
     filename_msg = f" Saved {len(filename_results)} changed filename setting(s)." if filename_results else ""
-    restrict_msg = f" Saved Restrict-Log-Users for {len(restrict_results)} server(s)." if restrict_results else ""
+    restrict_msg = f" Saved restrict logging setting(s): {len(restrict_results)} update(s)." if restrict_results else ""
     msg = f"saved Debug-mode {debug_mode} for {len(results)} server(s): {changed}.{filename_msg}{restrict_msg}"
     return RedirectResponse(f"/log-settings?server={quote_plus(first_server)}&log_control={quote_plus(msg)}", status_code=303)
 

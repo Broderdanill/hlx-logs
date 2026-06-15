@@ -6,7 +6,13 @@ The application is designed for containerized BMC Helix environments where log f
 
 ## Version
 
-**1.0.0**
+**1.0.7**
+
+Patch notes:
+- Added support for `Restrict-Logging`, the on/off switch for restricted AR logging. The UI now reads this setting to decide whether restricted logging is enabled.
+- Saving restricted logging writes `Restrict-Logging=1` when enabled and `Restrict-Logging=0` when disabled.
+- `Restrict-Log-Users` remains the semicolon-separated user list and is preserved when restricted logging is disabled.
+- Missing `Restrict-Logging` and `Restrict-Log-Users` component-setting rows are created through the existing Component/Setting GUID mapping flow.
 
 ## What it does
 
@@ -88,7 +94,7 @@ chmod +x buildah-script.sh
 Optional build variables:
 
 ```bash
-IMAGE_NAME=localhost/hlx-logs IMAGE_TAG=1.0.0 ./buildah-script.sh
+IMAGE_NAME=localhost/hlx-logs IMAGE_TAG=1.0.7 ./buildah-script.sh
 NO_CACHE=true ./buildah-script.sh
 PULL=false ./buildah-script.sh
 ```
@@ -195,7 +201,11 @@ Thread-Log-File
 Alert-Log-File
 ```
 
-`Restrict-Log-Users` can be enabled with a semicolon-separated list of AR login names. Disabling it is idempotent: if the setting row does not exist, the app treats that as already disabled.
+`Restrict-Logging` controls whether restricted logging is active (`1` = enabled, `0` = disabled). `Restrict-Log-Users` stores the semicolon-separated AR login names used when restricted logging is enabled; the list is preserved when `Restrict-Logging` is set to `0`.
+
+Before saving any setting through `AR System Configuration Component Setting`, `hlx-logs` checks `AR System Block Configuration Component Setting` for rows where `Status` is `Blocked Setting` **and where `Setting Name` matches the setting being saved**. Only those scoped rows are changed to `Allowed Setting` before the save starts, and the same scoped settings are verified again after saving. This unlocks the relevant AR settings without changing unrelated blocked settings.
+
+The Log settings page is read live from AR REST every time it is opened and sends `Cache-Control: no-store`, so the displayed `Debug-mode`, filename settings, `Restrict-Logging` and `Restrict-Log-Users` values reflect the current AR configuration rather than cached UI state.
 
 ## Collections and storage
 

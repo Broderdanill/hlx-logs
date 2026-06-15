@@ -84,7 +84,9 @@
         </label>
         <input type="text" name="restrict_log_users" value="{{ restrict_log_users }}" placeholder="user1;user2;user3" aria-label="Restrict log users">
         <input type="hidden" name="original_restrict_log_users" value="{{ restrict_log_users }}">
-        <small class="muted">Semicolon-separated AR login names. When unchecked, the Restrict-Log-Users setting is removed for selected pods.</small>
+        <input type="hidden" name="original_restrict_logging" value="{{ original_restrict_logging }}">
+        <input type="hidden" name="restrict_logging_missing" value="{{ 1 if restrict_logging_missing else 0 }}">
+        <small class="muted">Semicolon-separated AR login names. The toggle writes <code>Restrict-Logging</code>: <code>1</code> when enabled and <code>0</code> when disabled; the user list is preserved when disabled.</small>
       </div>
 
       <div class="dense-table log-settings-table">
